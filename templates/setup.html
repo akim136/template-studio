@@ -2,7 +2,7 @@
 {% block title %}New template{% endblock %}
 {% block head %}<script src="/static/setup.js" defer></script>{% endblock %}
 {% block body %}
-<main class="page page-setup" data-setup data-upload="{{ upload }}" data-max-bytes="{{ max_bytes }}">
+<main class="page page-setup" data-setup data-upload="{{ upload }}" data-drafting="{{ 'local' if viewer.local else 'hosted' }}" data-max-bytes="{{ max_bytes }}">
   <nav class="breadcrumb" aria-label="Breadcrumb">
     <a href="/" data-cancel>Templates</a><span aria-hidden="true">/</span><span aria-current="page">New template</span>
   </nav>
@@ -102,7 +102,11 @@
       <div class="alert alert-red" role="alert" hidden data-create-error></div>
       <button class="button button-primary button-wide" type="button" disabled data-create>Create draft</button>
       <a class="button button-wide" href="/" data-cancel>Cancel</a>
-      <p class="help">Creating saves revision 1 with no fields. AI field drafting is not in this build yet.</p>
+      {% if viewer.local %}
+        <p class="help">Creating saves revision 1 with no fields. Field drafting runs on the hosted studio, not in local mode.</p>
+      {% else %}
+        <p class="help">Creating saves revision 1 with no fields, then drafts its fields page by page with a model, within the studio's spend cap. You choose whether to save the result.</p>
+      {% endif %}
     </aside>
   </div>
   <dialog data-discard-dialog>

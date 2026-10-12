@@ -298,7 +298,8 @@
     const body = { source_sha256: state.source.sha256, policy: policy(), details: details() };
     const answer = await studio.api("POST", "/api/templates", body);
     if (answer.ok) {
-      window.location.assign(`/templates/${answer.data.id}`);
+      const drafting = root.dataset.drafting === "hosted";
+      window.location.assign(`/templates/${answer.data.id}${drafting ? "/analyzing?start=1" : ""}`);
       return;
     }
     creating = false;

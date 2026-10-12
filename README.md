@@ -4,10 +4,12 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P3 core interface, slice 4a: library, setup and record pages (local, and hosted on production and every preview).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
-because no app route analyzes anything yet. The shared analysis service reads the text layer and
-geometry of every page, renders every page, and flags pages the user must look at. Field drafting
-and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
+**Status: P3 core interface, slice 4b: library, setup, record and Analyzing pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`,
+which stops being accurate when this slice merges; changing it needs a scope update (guide
+section 10). The shared analysis service reads the text layer and geometry of every page, renders
+every page, and flags pages the user must look at. On the hosted studio, the Analyzing page drafts
+and self-checks fields with the model route, one model call per request, within the $10 spend cap;
+local mode does not draft. The saved-state routes under `/api`
 run against local disk, or on a deployment against Cloudflare R2 with Sign in with Vercel, always
 with a simulated signing adapter. There is no real signing provider. See
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and

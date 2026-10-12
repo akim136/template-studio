@@ -23,6 +23,10 @@ trusts X-Forwarded-For from a proxy on this machine by default, so a forwarded r
 by the address the proxy reports. It is not an identity: anyone who can run a request on this
 machine is answered.
 
+Field drafting (`studio.state.drafts`) runs only in hosted mode: its model credential is the OIDC
+token Vercel sends with each request, and its spend ledger is the one in R2. Each step request
+makes at most one model call.
+
 Hosted uploads go straight from the browser to R2: POST /api/uploads returns a presigned PUT for
 one hash and one length (a Vercel function accepts at most 4.5 MB of request body), and POST
 /api/uploads/{sha256}/seal reads the bytes back, re-hashes them and seals them.
@@ -50,7 +54,9 @@ from starlette.requests import cookie_parser
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from studio.services import gateway
 from studio.state import identity, lifecycle, sources
+from studio.state.drafts import Drafts, Unavailable
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.r2 import UPLOAD_EXPIRY_S, Credentials, R2ObjectStore
 from studio.state.signing import ORPHANED, Operations, SimulatedSigningAdapter
@@ -79,6 +85,11 @@ NOT_LOOPBACK = "saved state answers only loopback requests from loopback pages"
 NOT_SIGNED_IN = "sign in first at /auth/login"
 CROSS_ORIGIN = "a change must come from the studio's own pages"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+OIDC_HEADER = "x-vercel-oidc-token"  # sent by Vercel to each function request
+HOSTED_ONLY = (
+    "field drafting runs on the hosted studio, where one spend ledger holds the $10 cap; "
+    "local state has no model credential"
+)
 
 
 def utc_now() -> datetime:
@@ -92,6 +103,7 @@ class Services:
     operations: Operations
     auth: identity.AuthConfig | None = None  # None: local loopback mode, nobody signs in
     clock: Callable[[], datetime] = utc_now
+    drafts: Drafts | None = None
 
 
 @dataclass(frozen=True)
@@ -116,7 +128,8 @@ def _services_on(
 ) -> Services:
     templates = Templates(store, clock)
     operations = Operations(store, templates, SimulatedSigningAdapter(store), clock)
-    return Services(store, templates, operations, auth, clock)
+    drafts = Drafts(store, templates, clock)
+    return Services(store, templates, operations, auth, clock, drafts)
 
 
 def configure(environ: Mapping[str, str], repository: Path) -> Configuration:
@@ -235,6 +248,10 @@ class UploadRequest(_Body):
 
 class Resolution(_Body):
     note: str  # what the person found at the provider
+
+
+class DraftStart(_Body):
+    base_revision: int
 
 
 router = APIRouter(prefix="/api")
@@ -357,6 +374,8 @@ def _call(action: Callable[..., Any], *args: Any, writes: bool = True) -> Any:
         raise HTTPException(422, {"errors": error.errors}) from None
     except Conflict as error:
         raise HTTPException(409, {"reason": error.reason, "current": error.current}) from None
+    except Unavailable as error:
+        raise HTTPException(503, str(error)) from None
     except StorageError as error:
         if not writes:
             raise HTTPException(503, f"storage failed; reload and try again: {error}") from None
@@ -499,6 +518,57 @@ def check_operation(template_id: str, request: Request) -> dict:
 def resolve_orphan(template_id: str, operation_id: str, body: Resolution, request: Request) -> dict:
     operations = _services(request).operations
     return _call(operations.resolve, template_id, operation_id, body.note, _by(request))
+
+
+def _drafts(request: Request) -> Drafts:
+    services = _services(request)
+    if services.auth is None or services.drafts is None:
+        raise HTTPException(409, HOSTED_ONLY)
+    return services.drafts
+
+
+def _model_token(request: Request) -> str | None:
+    """The request's OIDC token, else the environment's. Never logged, stored or returned."""
+    token = request.headers.get(OIDC_HEADER, "").strip()
+    if token:
+        return token
+    try:
+        return gateway.read_token()
+    except gateway.GatewayError:
+        return None
+
+
+@router.post("/templates/{template_id}/drafts", status_code=201)
+def start_draft(template_id: str, body: DraftStart, request: Request) -> dict:
+    drafts = _drafts(request)
+    return _call(drafts.start, template_id, body.base_revision, _by(request))
+
+
+@router.get("/templates/{template_id}/drafts/latest")
+def latest_draft(template_id: str, request: Request) -> dict:
+    return {"draft": _call(_drafts(request).latest, template_id, writes=False)}
+
+
+@router.get("/templates/{template_id}/drafts/{draft_id}")
+def get_draft(template_id: str, draft_id: str, request: Request) -> dict:
+    return _call(_drafts(request).view, template_id, draft_id, writes=False)
+
+
+@router.post("/templates/{template_id}/drafts/{draft_id}/step")
+def step_draft(template_id: str, draft_id: str, request: Request) -> dict:
+    drafts = _drafts(request)
+    return _call(drafts.step, template_id, draft_id, _model_token(request))
+
+
+@router.get("/templates/{template_id}/drafts/{draft_id}/result")
+def draft_result(template_id: str, draft_id: str, request: Request) -> dict:
+    return _call(_drafts(request).result, template_id, draft_id, writes=False)
+
+
+@router.post("/templates/{template_id}/drafts/{draft_id}/apply")
+def apply_draft(template_id: str, draft_id: str, request: Request) -> dict:
+    drafts = _drafts(request)
+    return _call(drafts.apply, template_id, draft_id, _by(request))
 
 
 def _auth(request: Request) -> tuple[identity.AuthConfig, Services]:

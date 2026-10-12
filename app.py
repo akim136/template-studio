@@ -7,8 +7,8 @@ The state routes under /api answer 503 unless saved state is configured: a local
 the repository (STUDIO_STATE_DIR), or, on Vercel, R2 with Sign in with Vercel. /healthz reports
 which, and names any hosted setting that is missing or malformed (see studio/state/api.py).
 
-The pages (library, setup, a template's record) are rendered from templates/ with the scripts and
-styles in static/; they read and show only saved state (see studio/ui/pages.py).
+The pages (library, setup, field drafting, a template's record) are rendered from templates/ with
+the scripts and styles in static/; they read and show only saved state (see studio/ui/pages.py).
 """
 
 import os

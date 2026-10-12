@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% set details = template.details %}
+{% set title = details.title or 'Untitled' %}
+{% block title %}Analyzing {{ title }}{% endblock %}
+{% block head %}{% if not viewer.local %}<script src="/static/analyzing.js" defer></script>{% endif %}{% endblock %}
+{% block body %}
+<main class="page page-analyzing" data-analyzing data-template="{{ template.id }}" data-revision="{{ template.revision }}" data-cap="{{ cap }}" data-autostart="{{ 'yes' if autostart else 'no' }}"{% if source %} data-pages="{{ source.pages | length }}" data-size="{{ source.size }}"{% endif %} data-sha="{{ template.source_sha256[:12] }}…{{ template.source_sha256[-4:] }}">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Templates</a><span aria-hidden="true">/</span><a href="/templates/{{ template.id }}">{{ title }}</a><span aria-hidden="true">/</span><span aria-current="page">Analyzing</span>
+  </nav>
+  <section class="card card-pad analyzing-card" aria-labelledby="analyzing-title">
+    <div>
+      <h1 id="analyzing-title">Analyzing document</h1>
+      <p class="subline">{{ details.sponsor_name or 'Unassigned' }}{% if details.sponsor_account_id %} ({{ details.sponsor_account_id }}){% endif %} · {{ mode_label(template.policy.countersigner) }} · revision {{ template.revision }}</p>
+    </div>
+    {% if viewer.local %}
+      <div class="alert alert-blue" role="status">
+        <strong>Field drafting runs on the hosted studio.</strong>
+        Local state has no model credential, and the $10.00 spend cap is held in one ledger on the hosted studio, so drafting here could count spend twice. Open this template on the hosted studio to draft its fields.
+      </div>
+      <div class="actions"><a class="button" href="/templates/{{ template.id }}">Back to the record</a></div>
+    {% else %}
+      <ol class="stages" aria-label="Analysis stages" data-stages>
+        {% for label in ['Upload verified', 'Extract document', 'Propose fields', 'Validate draft', 'Ready for review'] %}
+          <li data-stage data-state="pending">
+            <span class="stage-mark" aria-hidden="true" data-mark>{{ loop.index }}</span>
+            <div>
+              <div class="stage-label">{{ label }} <span class="stage-state" data-state-text>Pending</span></div>
+              <div class="stage-detail" data-detail></div>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+      <div class="progress" role="progressbar" aria-label="Pages finished" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-progress><div data-progress-bar></div></div>
+      <div class="alert alert-red stack-tight" role="alert" hidden data-error>
+        <strong data-error-title>Drafting paused</strong>
+        <span data-error-text></span>
+      </div>
+      <div class="alert alert-yellow stack-tight" role="status" hidden data-stopped>
+        <strong data-stopped-title>Drafting stopped</strong>
+        <span data-stopped-text></span>
+      </div>
+      <div class="stack-tight" hidden data-result>
+        <p class="result-line" data-result-line></p>
+        <ul class="flags" hidden data-unfinished></ul>
+        <p class="help" hidden data-replaces></p>
+      </div>
+      <dl class="facts" data-spend>
+        <dt>This draft</dt><dd data-draft-usd>$0.00</dd>
+        <dt>All drafting</dt><dd><span data-total-usd>Not read yet</span> of the ${{ cap }} cap, including earlier command-line runs</dd>
+      </dl>
+      <p class="note">Each page is drafted, then checked, by one model call each. Leaving pauses drafting: calls already sent finish and are kept, and this page continues from there when you open it again.</p>
+      <div class="actions">
+        <button class="button button-primary" type="button" hidden data-start>Start drafting</button>
+        <button class="button button-primary" type="button" hidden data-continue>Continue drafting</button>
+        <button class="button button-primary" type="button" hidden data-apply>Save fields</button>
+        <button class="button" type="button" hidden data-restart>Start a new draft</button>
+        <a class="button" href="/templates/{{ template.id }}" hidden data-open-record>Open the record</a>
+        <a class="button" href="/" data-back>Back to templates</a>
+      </div>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

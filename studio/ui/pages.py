@@ -1,4 +1,5 @@
-"""The studio's pages: the library, setup and a template's record, rendered on the server.
+"""The studio's pages: the library, setup, field drafting and a template's record, rendered on
+the server.
 
 Every page answers like the state API (studio/state/api.py) and shows only what it can read:
 - state not configured: a page saying so (503), with no sample data;
@@ -27,6 +28,7 @@ from starlette.requests import cookie_parser
 from studio.state import identity, lifecycle, sources
 from studio.state.api import NOT_CONFIGURED, NOT_LOOPBACK, Services, _loopback
 from studio.state.errors import NotFound
+from studio.state.ledger import CAP_USD
 from studio.state.policy import ROLES
 from studio.state.r2 import R2ObjectStore
 from studio.state.store import StorageError
@@ -215,6 +217,33 @@ def setup(request: Request) -> Response:
         "max_bytes": sources.MAX_SOURCE_BYTES,
     }
     return _render(request, services, "setup.html", context)
+
+
+@pages.get("/templates/{template_id}/analyzing", response_class=HTMLResponse)
+async def analyzing(request: Request, template_id: str, start: str = "") -> Response:
+    """Field drafting for one template. The browser drives it through the drafts API; in local
+    mode the page says where drafting runs instead."""
+    services, viewer, refusal = _viewer(request)
+    if refusal is not None:
+        return refusal
+    if not TEMPLATE_ID.fullmatch(template_id):
+        return _message(request, viewer, 404, "No such template", "Check the link.")
+    try:
+        snapshot = await run_in_threadpool(services.templates.get, template_id)
+        source = await run_in_threadpool(sources.load, services.store, snapshot["source_sha256"])
+    except NotFound:
+        return _message(request, viewer, 404, "No such template", "Check the link.")
+    except StorageError:
+        detail = "Something went wrong reading this template. Nothing was changed; reload to retry."
+        return _message(request, viewer, 503, "This template could not be loaded", detail)
+    context = {
+        "viewer": viewer,
+        "template": snapshot,
+        "source": source,
+        "cap": f"{CAP_USD:.2f}",
+        "autostart": start == "1",
+    }
+    return _render(request, services, "analyzing.html", context)
 
 
 @pages.get("/templates/{template_id}", response_class=HTMLResponse)

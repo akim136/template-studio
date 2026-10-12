@@ -7,6 +7,11 @@
     <a href="/">Templates</a><span aria-hidden="true">/</span><span aria-current="page">{{ details.title or 'Untitled' }}</span>
   </nav>
   <h1>{{ details.title or 'Untitled' }}<span class="chips"><span class="chip tone-{{ status.tone }}">{{ status.label }}</span><span class="chip tone-gray">Read-only</span></span></h1>
+  {% if viewer.local %}
+    <p class="help">Field drafting runs on the hosted studio, not in local mode.</p>
+  {% else %}
+    <div class="actions"><a class="button" href="/templates/{{ template.id }}/analyzing">Draft fields</a></div>
+  {% endif %}
   {% if template.issues %}
     <div class="alert alert-yellow" role="status">
       <strong>Review and approval are blocked:</strong>

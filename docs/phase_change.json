@@ -1,6 +1,1 @@
-{
-  "phase": "P3",
-  "kind": "feature",
-  "features": ["F-P3-core-ui"],
-  "summary": "PR4 slice 4a: server-rendered library, setup and record screens over the saved state, with real upload and typed sponsor details. No login screen, model UI or fixture fields."
-}
+{"phase": "P3", "kind": "feature", "features": ["F-P3-core-ui"], "summary": "PR4 slices 4a and 4b: server-rendered library, setup, record and Analyzing screens over the saved state, with real upload, typed sponsor details, and in-app field drafting on the hosted studio (one model call per request, an R2 spend ledger under the $10 cap). No login screen, model UI or fixture fields."}

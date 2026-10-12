@@ -38,6 +38,12 @@ STATE_ROUTES = {
     ("POST", "/api/uploads"),
     ("POST", "/api/uploads/{sha256}/seal"),
     ("POST", "/api/templates/{template_id}/operation/orphans/{operation_id}/resolve"),
+    ("POST", "/api/templates/{template_id}/drafts"),
+    ("GET", "/api/templates/{template_id}/drafts/latest"),
+    ("GET", "/api/templates/{template_id}/drafts/{draft_id}"),
+    ("POST", "/api/templates/{template_id}/drafts/{draft_id}/step"),
+    ("GET", "/api/templates/{template_id}/drafts/{draft_id}/result"),
+    ("POST", "/api/templates/{template_id}/drafts/{draft_id}/apply"),
 }
 AUTH_ROUTES = {
     ("GET", "/auth/login"),
@@ -49,6 +55,7 @@ PAGE_ROUTES = {
     ("GET", "/"),
     ("GET", "/new"),
     ("GET", "/templates/{template_id}"),
+    ("GET", "/templates/{template_id}/analyzing"),
     ("MOUNT", "/static"),
 }
 

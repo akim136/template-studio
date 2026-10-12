@@ -1,0 +1,285 @@
+import json
+
+import pytest
+
+from studio.services import gateway, inference
+from studio.services.analysis import analyze
+from studio.state import drafts, lifecycle, sources
+from studio.state.drafts import Drafts, Unavailable
+from studio.state.errors import Conflict, Invalid
+from studio.state.ledger import HEAD, StoreLedger
+from studio.state.store import canonical
+from tests.analysis.fake_gateway import FakeGateway, page_of
+from tests.analysis.pdf_factory import make_pdf
+from tests.analysis.test_fields import FORM
+from tests.state.helpers import POLICY, field
+
+MODEL = drafts.ROUTE.model
+
+
+def fake(**kw):
+    return FakeGateway(model=MODEL, **kw)
+
+
+@pytest.fixture
+def source():
+    return make_pdf([FORM, "A page of plain prose with no fields."])
+
+
+@pytest.fixture
+def book(services, clock):
+    return Drafts(services.store, services.templates, clock)
+
+
+@pytest.fixture
+def template(services, source):
+    sealed = sources.seal(services.store, source)
+    return services.templates.create(sealed["sha256"], POLICY)
+
+
+def run_to_end(book, template, draft, transport, limit=20, token="t"):
+    for _ in range(limit):
+        view = book.step(template["id"], draft["id"], token, transport)
+        if view["state"] != drafts.RUNNING:
+            return view
+    raise AssertionError("the draft did not finish")
+
+
+def test_starting_analyzes_once_and_stores_every_page(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    assert draft["state"] == drafts.RUNNING and draft["preflight"] == "PENDING"
+    assert [p["state"] for p in draft["pages"]] == ["pending", "pending"]
+    assert draft["model"] == "openai/gpt-5.4-mini" and draft["inventory"] == "COMPLETE"
+    prefix = f"templates/{template['id']}/drafts/{draft['id']}/pages/"
+    assert services.store.children(prefix) == ["0001.json", "0002.json"]
+
+
+def test_an_unfinished_draft_is_resumed_not_started_again(book, template):
+    first = book.start(template["id"], 1, "anonymous")
+    assert book.start(template["id"], 1, "anonymous")["id"] == first["id"]
+    assert book.latest(template["id"])["id"] == first["id"]
+
+
+def test_a_draft_starts_only_on_the_current_revision(book, template):
+    with pytest.raises(Conflict):
+        book.start(template["id"], 2, "anonymous")
+
+
+def test_no_credential_no_call(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    with pytest.raises(Unavailable):
+        book.step(template["id"], draft["id"], None)
+
+
+def test_each_step_makes_at_most_one_call_and_the_draft_completes(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    calls = []
+    view = draft
+    while view["state"] == drafts.RUNNING:
+        before = len(gateway_.chat_bodies())
+        view = book.step(template["id"], draft["id"], "t", gateway_)
+        calls.append(len(gateway_.chat_bodies()) - before)
+    assert max(calls) == 1
+    # preflight, page 1 stage A and B; page 2 has nothing to check, so only its stage A
+    assert [page_of(b) for b in gateway_.chat_bodies()] == [None, 1, 1, 2]
+    assert view["state"] == drafts.DRAFTED and view["done"] == 2
+    assert view["spend"]["draft_usd"] > 0
+    outcome = book.result(template["id"], draft["id"])
+    assert outcome["status"] == "COMPLETE" and len(outcome["fields"]) == 1
+    assert outcome["fields"][0]["id"] == "p0001-001" and outcome["fields"][0]["page"] == 1
+
+
+def test_the_draft_sends_exactly_what_the_cli_sends(book, template, source):
+    draft = book.start(template["id"], 1, "anonymous")
+    in_app = fake()
+    run_to_end(book, template, draft, in_app)
+    cli = fake()
+    config = inference.RunConfig(drafts.ROUTE, ["Client"], "lp", workers=1)
+    cli_ledger = StoreLedger(book.store, book.clock, "cli-comparison")
+    inference.run(
+        source, analyze(source), config, token="t", ledger=cli_ledger, run_id="c", transport=cli
+    )
+    assert sorted(map(canonical, in_app.chat_bodies())) == sorted(map(canonical, cli.chat_bodies()))
+
+
+def test_applying_saves_the_checked_fields_as_one_revision(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    applied = book.apply(template["id"], draft["id"], "anonymous")
+    saved = applied["template"]
+    assert saved["revision"] == 2 and len(saved["fields"]) == 1
+    assert saved["review"] is None and applied["draft"]["state"] == drafts.APPLIED
+    assert lifecycle.status(services.templates.summaries()[0]).label == "Needs review"
+    again = book.apply(template["id"], draft["id"], "anonymous")  # a retried apply
+    assert again["template"]["revision"] == 2
+
+
+def test_a_draft_is_not_applied_over_later_edits(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    services.templates.save(template["id"], 1, POLICY, [], "someone-else-saved")
+    with pytest.raises(Conflict, match="changed after this draft started"):
+        book.apply(template["id"], draft["id"], "anonymous")
+
+
+def test_a_running_draft_cannot_be_applied(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    with pytest.raises(Conflict, match="still running"):
+        book.apply(template["id"], draft["id"], "anonymous")
+
+
+def test_a_failed_check_leaves_its_page_out_and_never_uses_stage_a(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    view = run_to_end(book, template, draft, fake(fail_stage_b=True))
+    assert view["state"] == drafts.DRAFTED
+    outcome = book.result(template["id"], draft["id"])
+    assert outcome["status"] == "PARTIAL" and outcome["fields"] == []
+    assert outcome["unfinished"][0]["page"] == 1
+    assert outcome["unfinished"][0]["status"].startswith("FAILED")
+    with pytest.raises(Invalid, match="no fields"):
+        book.apply(template["id"], draft["id"], "anonymous")
+
+
+def test_a_draft_that_would_pass_the_cap_stops_before_sending(book, template, services):
+    head = {"opening_usd": "2.276604", "settled_usd": "7.72", "open": {}, "runs": {}}
+    services.store.put_new(HEAD, canonical(head))
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    view = book.step(template["id"], draft["id"], "t", gateway_)
+    assert gateway_.requests == []  # nothing was sent
+    assert view["state"] == drafts.STOPPED and "cap" in view["stop_reason"]
+    assert view["preflight"].startswith("BUDGET_STOPPED")
+
+
+def test_a_wrong_route_stops_the_draft(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    view = book.step(template["id"], draft["id"], "t", FakeGateway(model="openai/gpt-4.1"))
+    assert view["state"] == drafts.STOPPED and view["stop_reason"].startswith("route violation")
+    assert book.step(template["id"], draft["id"], "t", fake())["state"] == drafts.STOPPED
+
+
+def test_a_claimed_call_is_never_sent_twice(book, template, services, clock):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight
+    prefix = f"templates/{template['id']}/drafts/{draft['id']}/steps/"
+    claim = canonical({"at": clock().isoformat()})
+    services.store.put_new(prefix + "p0001-a.started.json", claim)  # another request is on it
+    view = book.step(template["id"], draft["id"], "t", gateway_)
+    assert [page_of(b) for b in gateway_.chat_bodies()] == [None, 2]
+    assert view["pages"][0]["state"] == "drafting"
+    clock.advance(seconds=drafts.LEASE.total_seconds() + 1)  # that request never finished
+    view = run_to_end(book, template, draft, gateway_)
+    assert view["pages"][0]["state"] == "lost" and view["state"] == drafts.DRAFTED
+    assert [page_of(b) for b in gateway_.chat_bodies()].count(1) == 0
+    assert book.result(template["id"], draft["id"])["status"] == "PARTIAL"
+
+
+def test_a_route_check_that_never_answered_stops_the_draft(book, template, services, clock):
+    draft = book.start(template["id"], 1, "anonymous")
+    prefix = f"templates/{template['id']}/drafts/{draft['id']}/steps/"
+    services.store.put_new(
+        prefix + "preflight.started.json", canonical({"at": clock().isoformat()})
+    )
+    assert book.view(template["id"], draft["id"])["state"] == drafts.RUNNING
+    clock.advance(seconds=drafts.LEASE.total_seconds() + 1)
+    view = book.view(template["id"], draft["id"])
+    assert view["state"] == drafts.STOPPED and "outcome is unknown" in view["stop_reason"]
+
+
+def test_records_never_hold_the_token(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    run_to_end(book, template, draft, gateway_, token="secret-token")
+    assert all("secret-token" in h["Authorization"] for _, _, h in gateway_.requests)
+    book.apply(template["id"], draft["id"], "anonymous")
+    root = f"templates/{template['id']}/drafts/{draft['id']}/"
+    for folder in ("", "pages/", "steps/"):
+        for name in services.store.children(root + folder):
+            if name.endswith(".json"):
+                assert b"secret-token" not in services.store.get(root + folder + name).data
+    for name in services.store.children("spend/rows/"):
+        assert b"secret-token" not in services.store.get("spend/rows/" + name).data
+
+
+def test_the_stage_records_are_kept(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    steps = f"templates/{template['id']}/drafts/{draft['id']}/steps/"
+    first = json.loads(services.store.get(steps + "p0001-a.json").data)
+    check = json.loads(services.store.get(steps + "p0001-b.json").data)
+    assert first["status"] == "RECEIVED" and check["status"] == "RECEIVED"
+    assert first["evidence"]["image_sha256"] == check["evidence"]["image_sha256"]
+    assert check["changes"] == [] and len(check["evidence"]["calls"]) == 1
+    assert gateway.TIMEOUT_S < drafts.LEASE.total_seconds()
+
+
+def test_a_step_passes_over_work_another_request_claimed(book, template, services, clock):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight
+    prefix = f"templates/{template['id']}/drafts/{draft['id']}/steps/"
+    real_claim = book._claim
+
+    def raced(prefix_, step):  # another request claims page 1 between the listing and the claim
+        if step == "p0001-a":
+            real_claim(prefix_, step)
+            return False
+        return real_claim(prefix_, step)
+
+    book._claim = raced
+    book.step(template["id"], draft["id"], "t", gateway_)
+    assert [page_of(b) for b in gateway_.chat_bodies()] == [None, 2]  # one call, on page 2
+    assert services.store.get(prefix + "p0002-a.json") is not None
+
+
+def test_the_view_says_how_many_saved_fields_applying_replaces(book, template, services):
+    services.templates.save(template["id"], 1, POLICY, [field()], "first-save")
+    assert book.start(template["id"], 2, "anonymous")["base_fields"] == 1
+
+
+def test_a_page_call_that_would_pass_the_cap_stops_the_draft(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight passes
+    stored = services.store.get(HEAD)
+    head = json.loads(stored.data) | {"settled_usd": "7.72"}
+    services.store.replace(HEAD, canonical(head), stored.etag)
+    view = book.step(template["id"], draft["id"], "t", gateway_)
+    assert len(gateway_.chat_bodies()) == 1  # only the preflight was sent
+    assert view["state"] == drafts.STOPPED and view["stop_reason"].startswith("budget")
+    assert book.result(template["id"], draft["id"])["status"] == "PARTIAL"
+
+
+def test_drafting_works_on_r2(hosted):
+    sealed = sources.seal(hosted.store, make_pdf([FORM]))
+    template = hosted.templates.create(sealed["sha256"], POLICY)
+    draft = hosted.drafts.start(template["id"], 1, "anonymous")
+    view = run_to_end(hosted.drafts, template, draft, fake())
+    assert view["state"] == drafts.DRAFTED
+    applied = hosted.drafts.apply(template["id"], draft["id"], "anonymous")
+    assert applied["template"]["revision"] == 2 and len(applied["template"]["fields"]) == 1
+
+
+def test_a_step_that_began_before_a_stop_sends_nothing(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight
+    prefix = f"templates/{template['id']}/drafts/{draft['id']}/"
+    real_claim = book._claim
+
+    def stopped_meanwhile(prefix_, step):  # another request records a route violation first
+        services.store.put_new(
+            prefix + "violation.json", canonical({"reason": "route violation: x"})
+        )
+        return real_claim(prefix_, step)
+
+    book._claim = stopped_meanwhile
+    view = book.step(template["id"], draft["id"], "t", gateway_)
+    assert len(gateway_.chat_bodies()) == 1  # only the preflight
+    assert view["state"] == drafts.STOPPED
+    first = json.loads(services.store.get(prefix + "steps/p0001-a.json").data)
+    check = json.loads(services.store.get(prefix + "steps/p0001-b.json").data)
+    assert first["status"] == "NOT_RUN: route violation: x"
+    assert check["status"] == "NOT_RUN: stage A has no answer (NOT_RUN: route violation: x)"
