@@ -4,7 +4,7 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P2 state boundary (local, and hosted on production and every preview).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
+**Status: P3 core interface, slice 4a: library, setup and record pages (local, and hosted on production and every preview).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
 because no app route analyzes anything yet. The shared analysis service reads the text layer and
 geometry of every page, renders every page, and flags pages the user must look at. Field drafting
 and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
@@ -70,6 +70,11 @@ call and made read-only at the end. Stdout gets a summary with counts and spend 
 ```sh
 STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0.0.1 --port 8773
 ```
+
+Then open `http://127.0.0.1:8773/` for the library. Setup (`/new`) uploads a PDF, takes the typed
+sponsor account and the signature policy, and saves revision 1 with no fields; the record page shows a
+saved template read-only. The analyzing screen and the field editor are not built yet. The pages
+follow the same rules as the `/api` routes below.
 
 Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503 before any body
 is read: a deployment's disk is ephemeral, so saving there would be a false Saved. The directory

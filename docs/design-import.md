@@ -36,3 +36,21 @@ The following are **not imported**:
 - `baseline/` and `release/` copies;
 - the non-Clean `Template Studio.dc.html`;
 - the root `fixtures/*.json` used by the non-Clean prototype.
+
+## PR4 slice 4a, as built
+
+Slice 4a (`feat/studio-core-ui`) confirms these rows. Slice 4b covers D-06; slice 4c covers the editor rows D-07 to D-12 and draft-from-record (D-13).
+
+| ID | Confirmed target | Notes |
+|---|---|---|
+| D-01 | `templates/base.html`, `static/studio.css` | The tokens are CSS variables. The pages carry a strict content security policy: no inline script or style, and `connect-src` adds the R2 host only in hosted mode. |
+| D-02 | `templates/library.html`, `studio/ui/pages.py`, `GET /api/templates` | The server does the tabs, search, signature-mode filter, sort and paging. The export's Origin column and legacy footnote are left out, because there are no legacy imports. A library that cannot be read shows an error, never an empty library. |
+| D-03 | `studio/state/lifecycle.py` | Adds one label the export lacks, Unreadable, for a template whose saved state cannot be read. It is listed under Failed. |
+| D-04 | `templates/setup.html`, `static/setup.js`, `studio/state/policy.py` | **Proposed:** the operator types the sponsor account name and an optional account ID, since the studio has no account directory. They are saved in the revision with the title and are part of the review binding. The UI requires the sponsor name; the API does not, so templates created before this slice stay valid. Until slice 4b the primary button reads "Create draft", and it saves revision 1 with no fields. |
+| D-05 | `static/setup.js` | Hosted mode uses direct R2 upload (`/api/uploads`, then seal). Local mode posts to `/api/sources`. The browser hashes the file first and checks that the studio sealed the same SHA-256. A file the studio refuses (not a readable PDF, or too large) is Unsupported and offers no retry. |
+| D-13 | `templates/record.html` | Read-only for now. It shows the saved revision, its source, its review and approval, its operation, and the reasons review is blocked. |
+| D-14 | — | Still rejected. Hosted pages send a visitor without a session to Sign in with Vercel (PR #8), and a browser that opens `/auth/me` is redirected to the library. |
+| D-16 | — | Still rejected. Setup has no model row. |
+| D-17 | — | No sample packet and no fixture fields. Every test file is synthetic. |
+
+The only dependency change is Jinja2, which Alex approved on October 12, 2026.

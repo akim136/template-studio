@@ -50,7 +50,7 @@ from starlette.requests import cookie_parser
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from studio.state import identity, sources
+from studio.state import identity, lifecycle, sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.r2 import UPLOAD_EXPIRY_S, Credentials, R2ObjectStore
 from studio.state.signing import ORPHANED, Operations, SimulatedSigningAdapter
@@ -212,6 +212,7 @@ class _Body(BaseModel):
 class NewTemplate(_Body):
     source_sha256: str
     policy: dict[str, Any]
+    details: dict[str, Any] | None = None  # title and sponsor account; blank when left out
 
 
 class Save(_Body):
@@ -219,6 +220,7 @@ class Save(_Body):
     policy: dict[str, Any]
     fields: list[Any]
     save_id: str  # chosen by the client per save; a retry of the same request reuses it
+    details: dict[str, Any] | None = None  # left out: the base revision's details are kept
 
 
 class Bound(_Body):
@@ -427,7 +429,13 @@ async def seal_upload(sha256: str, request: Request) -> dict:
 @router.post("/templates", status_code=201)
 def create_template(body: NewTemplate, request: Request) -> dict:
     templates = _services(request).templates
-    return _call(templates.create, body.source_sha256, body.policy)
+    return _call(templates.create, body.source_sha256, body.policy, body.details)
+
+
+@router.get("/templates")
+def list_templates(request: Request) -> dict:
+    rows = _call(_services(request).templates.summaries, writes=False)
+    return {"templates": [{**row, "status": lifecycle.status(row).label} for row in rows]}
 
 
 @router.get("/templates/{template_id}")
@@ -438,7 +446,7 @@ def get_template(template_id: str, request: Request) -> dict:
 @router.put("/templates/{template_id}")
 def save_template(template_id: str, body: Save, request: Request) -> dict:
     templates = _services(request).templates
-    args = (template_id, body.base_revision, body.policy, body.fields, body.save_id)
+    args = (template_id, body.base_revision, body.policy, body.fields, body.save_id, body.details)
     snapshot, changed = _call(templates.save, *args)
     return {"saved": True, "new_revision": changed, "template": snapshot}
 
@@ -551,13 +559,15 @@ async def callback(
     return response
 
 
-@auth_router.get("/me")
-def me(request: Request) -> dict:
+@auth_router.get("/me", response_model=None)
+def me(request: Request) -> dict | RedirectResponse:
     auth, services = _auth(request)
     cookie = request.cookies.get(identity.SESSION_COOKIE)
     actor = identity.session_actor(auth, cookie, services.clock())
     if actor is None:
         raise HTTPException(401, NOT_SIGNED_IN)
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/", 303)  # a browser arriving from sign-in goes to the library
     return {"email": actor.email, "name": actor.name, "identity": "Sign in with Vercel"}
 
 

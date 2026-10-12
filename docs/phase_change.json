@@ -1,6 +1,6 @@
 {
   "phase": "P3",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Advance to P3 and add F-P3-core-ui, the feature PR4 (feat/studio-core-ui) declares."
+  "kind": "feature",
+  "features": ["F-P3-core-ui"],
+  "summary": "PR4 slice 4a: server-rendered library, setup and record screens over the saved state, with real upload and typed sponsor details. No login screen, model UI or fixture fields."
 }

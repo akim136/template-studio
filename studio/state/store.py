@@ -49,6 +49,10 @@ class ObjectStore(Protocol):
 
     def replace(self, key: str, data: bytes, etag: str) -> str: ...
 
+    def children(self, prefix: str) -> list[str]:
+        """The sorted names directly under `prefix` (which ends with "/"): objects and folders."""
+        ...
+
 
 def canonical(value: object) -> bytes:
     return json.dumps(
@@ -113,6 +117,16 @@ class LocalObjectStore:
             if current is None or current.etag != etag:
                 raise PreconditionFailed(key)
             return self._write(key, data)
+
+    def children(self, prefix: str) -> list[str]:
+        folder = self.root / check_key(prefix.rstrip("/"))
+        try:
+            names = os.listdir(folder)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as error:
+            raise StorageError(f"cannot list {prefix}: {error.strerror}") from None
+        return sorted(name for name in names if not name.startswith("."))  # skips temporaries
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
