@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.state.errors import Conflict, Invalid
+from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.signing import (
     CREATED,
     CREATING,
@@ -81,9 +81,14 @@ def create(operations, approved):
     return operations.create(approved["id"], approved["revision"], approved["binding"])
 
 
+def orphan_key(approved):
+    return f"templates/{approved['id']}/orphans/index.json"
+
+
 def orphan(services, approved, operation_id):
-    stored = services.store.get(f"templates/{approved['id']}/orphans/{operation_id}.json")
-    return None if stored is None else json.loads(stored.data)
+    stored = services.store.get(orphan_key(approved))
+    kept = [] if stored is None else json.loads(stored.data)["orphans"]
+    return next((o for o in kept if o["id"] == operation_id), None)
 
 
 def test_create_needs_the_current_approved_revision(services, source):
@@ -287,8 +292,7 @@ def test_an_orphan_kept_already_is_not_written_again(services, clock, approved):
     def replaced_and_kept():
         replaced_by_a_create(operations, clock, approved)
         kept.update(id=adapter.calls[0], note="kept by an earlier report")
-        key = f"templates/{approved['id']}/orphans/{kept['id']}.json"
-        services.store.put_new(key, canonical(kept))
+        services.store.put_new(orphan_key(approved), canonical({"orphans": [kept]}))
 
     adapter.during_create = replaced_and_kept
     assert create(operations, approved) == kept
@@ -360,6 +364,7 @@ def test_an_operation_that_takes_its_slot_back_is_not_left_listed_as_an_orphan(
     first = create(operations, approved)
     assert first["state"] == CREATED and operations.get(approved["id"]) == first
     assert "resolve by hand" not in orphan(services, approved, first["id"])["note"]
+    assert operations.orphans(approved["id"]) == []  # it holds the slot: nothing to resolve
 
 
 def test_a_replacement_declared_failed_whose_create_lands_later_is_kept_as_an_orphan(
@@ -535,3 +540,93 @@ def test_a_failure_to_record_the_outcome_points_to_a_status_check(
             create(operations, approved)
     assert operations.get(approved["id"])["state"] == CREATING
     assert operations.check_status(approved["id"])["state"] == CREATED
+
+
+def approve_next(services, approved, x=80.0):
+    """Saves, reviews and approves the next revision of an approved template."""
+    templates = services.templates
+    saved, _ = templates.save(approved["id"], approved["revision"], POLICY, [field(x=x)])
+    templates.confirm_review(saved["id"], saved["revision"], saved["binding"])
+    return templates.approve(saved["id"], saved["revision"], saved["binding"])
+
+
+def test_each_approved_revision_is_created_once_and_replaces_the_one_before(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock)
+    first = create(operations, approved)
+    with pytest.raises(Conflict, match="this revision was already created"):
+        create(operations, approved)
+    later = approve_next(services, approved)
+    adapter.create_outcome = "refuse"
+    refused = create(operations, later)
+    assert refused["state"] == FAILED and [r["id"] for r in refused["replaced"]] == [first["id"]]
+    adapter.create_outcome = "ok"
+    second = create(operations, later)  # a FAILED create carries the list forward
+    assert second["state"] == CREATED and second["revision"] == later["revision"]
+    assert second["replaced"] == refused["replaced"]
+    replaced = second["replaced"][0]
+    assert replaced["revision"] == first["revision"]
+    assert replaced["external_id"] == first["external_id"]
+    third = create(operations, approve_next(services, later, x=90.0))
+    assert [r["id"] for r in third["replaced"]] == [first["id"], second["id"]]
+
+
+def test_a_late_check_of_a_created_and_replaced_operation_is_not_an_orphan(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+    first = create(operations, approved)
+    assert first["state"] == NEEDS_STATUS_CHECK
+
+    def created_then_replaced():
+        assert operations.check_status(approved["id"])["state"] == CREATED
+        adapter.create_outcome = "ok"
+        create(operations, approve_next(services, approved))
+
+    adapter.during_find = created_then_replaced
+    checked = operations.check_status(approved["id"])  # its read of the slot is now stale
+    assert checked["id"] != first["id"] and checked["state"] == CREATED
+    assert orphan(services, approved, first["id"]) is None
+    assert operations.orphans(approved["id"]) == []
+
+
+def orphaned(services, clock, approved):
+    """A first create lands after a second create replaced it: an unresolved orphan."""
+    operations, adapter = scripted(services, clock)
+    adapter.during_create = lambda: replaced_by_a_create(operations, clock, approved)
+    kept = create(operations, approved)
+    assert kept["status"] == "unresolved" and "resolve by hand" in kept["note"]
+    return operations, kept
+
+
+def test_an_unresolved_orphan_is_listed_and_refuses_every_create(services, clock, approved):
+    operations, kept = orphaned(services, clock, approved)
+    assert operations.orphans(approved["id"]) == [kept]
+    later = approve_next(services, approved)
+    with pytest.raises(Conflict, match="check the provider") as refused:
+        create(operations, later)
+    assert refused.value.current == {"orphans": [kept]}
+    resolved = operations.resolve(approved["id"], kept["id"], "  holds both; voided one  ", "r@x")
+    assert resolved["status"] == "resolved"
+    assert resolved["resolution"] == {
+        "note": "holds both; voided one",
+        "by": "r@x",
+        "at": clock().isoformat(),
+    }
+    assert operations.orphans(approved["id"]) == []
+    assert orphan(services, approved, kept["id"]) == resolved  # kept, as resolved
+    assert create(operations, later)["state"] == CREATED
+
+
+def test_resolving_needs_a_note_and_a_kept_orphan_and_happens_once(services, clock, approved):
+    operations, kept = orphaned(services, clock, approved)
+    for note in ("", "   ", "x" * 501):
+        with pytest.raises(Invalid):
+            operations.resolve(approved["id"], kept["id"], note)
+    with pytest.raises(NotFound):
+        operations.resolve(approved["id"], "0" * 32, "checked")
+    first = operations.resolve(approved["id"], kept["id"], "checked")
+    assert first["resolution"]["by"] == "anonymous"
+    clock.advance(minutes=1)
+    assert operations.resolve(approved["id"], kept["id"], "again", "other@x") == first

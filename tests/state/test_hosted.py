@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
@@ -7,9 +8,11 @@ from fastapi.testclient import TestClient
 
 from app import app
 from studio.state import api, identity, r2
+from studio.state.signing import Operations
 from tests.state.helpers import POLICY, Clock, field, two_page_pdf
 from tests.state.test_identity import FakeVercel
 from tests.state.test_r2 import CREDENTIALS, FakeR2
+from tests.state.test_signing import Scripted, replaced_by_a_create
 
 ORIGIN = "https://studio.example.test"
 AUTH = identity.AuthConfig("synthetic-client", "synthetic-client-secret", "s" * 40, ORIGIN)
@@ -136,6 +139,28 @@ def test_a_reviewer_name_in_the_body_is_refused_not_trusted(client, bucket):
     claimed = {**bound(template), "by": "someone-else@example.test"}
     url = f"/api/templates/{template['id']}/review"
     assert client.post(url, json=claimed, headers=SAME_ORIGIN).status_code == 422
+
+
+def test_resolving_an_orphan_records_the_verified_email(client, hosted, bucket, clock, monkeypatch):
+    adapter = Scripted()
+    operations = Operations(hosted.store, hosted.templates, adapter, clock)
+    monkeypatch.setattr(app.state, "services", dataclasses.replace(hosted, operations=operations))
+    sha256 = uploaded(client, bucket, two_page_pdf())
+    client.post(f"/api/uploads/{sha256}/seal", headers=SAME_ORIGIN)
+    body = {"source_sha256": sha256, "policy": POLICY}
+    template = client.post("/api/templates", json=body, headers=SAME_ORIGIN).json()
+    url = f"/api/templates/{template['id']}"
+    save = {"base_revision": 1, "policy": POLICY, "fields": [field()], "save_id": "request-0001"}
+    current = client.put(url, json=save, headers=SAME_ORIGIN).json()["template"]
+    client.post(f"{url}/review", json=bound(current), headers=SAME_ORIGIN)
+    approved = client.post(f"{url}/approval", json=bound(current), headers=SAME_ORIGIN).json()
+    adapter.during_create = lambda: replaced_by_a_create(operations, clock, approved)
+    kept = client.post(f"{url}/operation", json=bound(approved), headers=SAME_ORIGIN).json()
+    resolve = f"{url}/operation/orphans/{kept['id']}/resolve"
+    note = {"note": "the provider holds both"}
+    assert client.post(resolve, json=note).status_code == 403  # not from the studio's own pages
+    resolved = client.post(resolve, json=note, headers=SAME_ORIGIN).json()
+    assert resolved["status"] == "resolved" and resolved["resolution"]["by"] == EMAIL
 
 
 def test_sign_in_started_on_another_deployment_host_moves_to_the_public_origin(hosted, monkeypatch):

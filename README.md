@@ -99,12 +99,15 @@ names out; it is not a login, and any process on this machine is answered. A fai
   template. A box on a page whose rotation the two PDF readers disagree on is refused, and the page
   is flagged. A template's source is fixed: a complete source needs a new template.
 - `POST .../operation` creates the template through the simulated adapter, only for the approved
-  current revision. An unknown outcome keeps its operation ID and offers only
-  `POST .../operation/status-check`; a second create is refused. A create the provider holds wins
-  over a concurrent check that missed it. One reported or found after its operation was replaced
-  takes the slot back if the replacement failed; otherwise it is kept under
-  `templates/{id}/orphans/` in the state directory, to resolve by hand. An orphan record of an
-  operation that later took its slot back says so.
+  current revision, and once per approved revision: a later approved revision is created again,
+  and the operation lists the ones it replaced in `replaced`. An unknown outcome keeps its
+  operation ID and offers only `POST .../operation/status-check`; a second create of the same
+  revision is refused. A create the provider holds wins over a concurrent check that missed it.
+  One reported or found after its operation was replaced takes the slot back if the replacement
+  failed; otherwise it is kept in the orphan list, because the provider may hold both.
+- Every operation answer carries `orphans` (unresolved ones) and, while any remain, a `warning`.
+  An unresolved orphan refuses every create (409) until someone checks the provider and posts
+  `POST .../operation/orphans/{operation_id}/resolve` with a `note` saying what they found.
 
 ## Hosted state (R2 and Sign in with Vercel)
 

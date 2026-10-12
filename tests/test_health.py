@@ -34,6 +34,7 @@ STATE_ROUTES = {
     ("POST", "/api/templates/{template_id}/operation/status-check"),
     ("POST", "/api/uploads"),
     ("POST", "/api/uploads/{sha256}/seal"),
+    ("POST", "/api/templates/{template_id}/operation/orphans/{operation_id}/resolve"),
 }
 AUTH_ROUTES = {
     ("GET", "/auth/login"),

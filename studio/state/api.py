@@ -52,7 +52,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from studio.state import identity, sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.r2 import UPLOAD_EXPIRY_S, Credentials, R2ObjectStore
-from studio.state.signing import Operations, SimulatedSigningAdapter
+from studio.state.signing import ORPHANED, Operations, SimulatedSigningAdapter
 from studio.state.store import LocalObjectStore, ObjectStore, StorageError
 from studio.state.templates import ACTOR, Templates
 
@@ -216,6 +216,10 @@ class Bound(_Body):
 class UploadRequest(_Body):
     sha256: str
     size: int
+
+
+class Resolution(_Body):
+    note: str  # what the person found at the provider
 
 
 router = APIRouter(prefix="/api")
@@ -439,20 +443,40 @@ def approve(template_id: str, body: Bound, request: Request) -> dict:
     return _call(templates.approve, template_id, body.revision, body.binding, _by(request))
 
 
+def _with_orphans(operations: Operations, template_id: str, operation: dict) -> dict:
+    """Every operation answer lists unresolved orphans, with a warning while any remain."""
+    orphans = _call(operations.orphans, template_id, writes=False)
+    view = {**operation, "orphans": orphans}
+    if orphans:
+        view["warning"] = ORPHANED
+    return view
+
+
 @router.post("/templates/{template_id}/operation")
 def create_signing_template(template_id: str, body: Bound, request: Request) -> dict:
     operations = _services(request).operations
-    return _call(operations.create, template_id, body.revision, body.binding)
+    operation = _call(operations.create, template_id, body.revision, body.binding)
+    return _with_orphans(operations, template_id, operation)
 
 
 @router.get("/templates/{template_id}/operation")
 def get_operation(template_id: str, request: Request) -> dict:
-    return _call(_services(request).operations.get, template_id, writes=False)
+    operations = _services(request).operations
+    operation = _call(operations.get, template_id, writes=False)
+    return _with_orphans(operations, template_id, operation)
 
 
 @router.post("/templates/{template_id}/operation/status-check")
 def check_operation(template_id: str, request: Request) -> dict:
-    return _call(_services(request).operations.check_status, template_id)
+    operations = _services(request).operations
+    operation = _call(operations.check_status, template_id)
+    return _with_orphans(operations, template_id, operation)
+
+
+@router.post("/templates/{template_id}/operation/orphans/{operation_id}/resolve")
+def resolve_orphan(template_id: str, operation_id: str, body: Resolution, request: Request) -> dict:
+    operations = _services(request).operations
+    return _call(operations.resolve, template_id, operation_id, body.note, _by(request))
 
 
 def _auth(request: Request) -> tuple[identity.AuthConfig, Services]:
