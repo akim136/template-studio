@@ -117,6 +117,16 @@ def test_a_new_state_directory_is_synced_into_its_parent(tmp_path, monkeypatch):
     assert synced == [tmp_path]
 
 
+def test_missing_parents_of_the_state_directory_are_made_owner_only_and_synced(
+    tmp_path, monkeypatch
+):
+    synced = []
+    monkeypatch.setattr(store_module, "_sync_folder", synced.append)
+    LocalObjectStore(tmp_path / "x" / "s")
+    assert synced == [tmp_path, tmp_path / "x"]
+    assert stat.S_IMODE((tmp_path / "x").stat().st_mode) == 0o700
+
+
 def test_two_stores_on_one_folder_never_both_win(tmp_path, monkeypatch):
     real = LocalObjectStore._write
 

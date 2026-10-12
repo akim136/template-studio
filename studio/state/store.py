@@ -72,20 +72,17 @@ class LocalObjectStore:
     The directory must be a real directory (not a link), owned by this user and closed to
     everyone else, or the store refuses to open. Each write goes to a temporary file that is
     flushed, synced and renamed into place, so a reader sees the old object or the new one, never
-    part of one; every folder the store creates, the directory itself included, is synced into its
-    parent. A lock file serializes
-    conditional writes across threads and processes on this machine.
+    part of one. Every folder the store creates, the directory and any missing parents included, is
+    owner-only and synced into its parent. A lock file serializes conditional writes across threads
+    and processes on this machine.
     """
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self._lock = threading.Lock()
         try:
-            created = not os.path.lexists(self.root)
-            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _make_folders(self.root)
             info = self.root.lstat()
-            if created:
-                _sync_folder(self.root.parent)
         except OSError as error:
             raise StorageError(f"cannot create the state directory: {error.strerror}") from None
         if not stat.S_ISDIR(info.st_mode):
@@ -132,7 +129,7 @@ class LocalObjectStore:
         path = self.root / check_key(key)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
-            self._make_folders(path.parent)
+            _make_folders(path.parent, self.root)
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 with os.fdopen(descriptor, "wb") as out:
@@ -147,14 +144,16 @@ class LocalObjectStore:
             raise StorageError(f"cannot write {key}: {error.strerror}") from None
         return hashlib.sha256(data).hexdigest()
 
-    def _make_folders(self, folder: Path) -> None:
-        missing = []
-        while folder != self.root and not folder.is_dir():
-            missing.append(folder)
-            folder = folder.parent
-        for created in reversed(missing):
-            created.mkdir(mode=0o700, exist_ok=True)
-            _sync_folder(created.parent)
+
+def _make_folders(folder: Path, top: Path | None = None) -> None:
+    """Makes `folder` and its missing parents below `top`, each owner-only and synced."""
+    missing = []
+    while folder != top and not os.path.lexists(folder):
+        missing.append(folder)
+        folder = folder.parent
+    for created in reversed(missing):
+        created.mkdir(mode=0o700, exist_ok=True)
+        _sync_folder(created.parent)
 
 
 def _sync_folder(folder: Path) -> None:

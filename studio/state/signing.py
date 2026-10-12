@@ -18,10 +18,11 @@ A template has at most one operation that is not FAILED, so a create is never re
 
 A create the adapter reports, or a status check finds at the provider, is written onto the stored
 operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
-lost or left FAILED. If the operation was replaced by another meanwhile, the provider may hold
-both: the earlier one is kept under templates/{id}/orphans/ with a note to resolve it by hand. A
-status check that would change nothing writes nothing, so repeated checks cannot crowd out a create
-being recorded. If recording the operation fails before the adapter is called, the operation is
+lost or left FAILED. If the operation was replaced by another meanwhile, it takes the slot back
+when the replacement FAILED (which holds nothing); otherwise the provider may hold both, and the
+earlier one is kept under templates/{id}/orphans/ with a note to resolve it by hand. A status check
+that would change nothing writes nothing, so repeated checks cannot crowd out a create being
+recorded. If recording the operation fails before the adapter is called, the operation is
 marked FAILED (not attempted) where it landed; if recording the outcome fails after the call, the
 error says to check its status.
 """
@@ -212,16 +213,19 @@ class Operations:
     ) -> tuple[dict, str | None]:
         """Writes a create the adapter reported (VERIFYING) or the provider holds (CREATED) onto
         the stored operation, whatever a concurrent status check did to it meanwhile. A CREATED
-        operation stands; a replaced one is kept as an orphan. The etag is None when nothing was
-        written here."""
+        operation stands; one replaced by an operation that FAILED takes the slot back, and one
+        replaced by any other is kept as an orphan. The etag is None when nothing was written
+        here."""
         current = operation
         for _ in range(RECORD_ATTEMPTS):
-            if current["id"] != operation["id"]:
+            replaced = current["id"] != operation["id"]
+            if replaced and current["state"] != FAILED:
                 return self._orphan(operation, external_id), None
             if current["state"] == CREATED:
                 return current, None
             changes = {"external_id": external_id, "reported_created": True, "note": ""}
-            recorded = {**current, **changes, "state": state, "updated_at": self._now()}
+            mine = operation if replaced else current
+            recorded = {**mine, **changes, "state": state, "updated_at": self._now()}
             try:
                 return recorded, self.store.replace(key, canonical(recorded), etag)
             except PreconditionFailed:
@@ -237,6 +241,9 @@ class Operations:
             self.store.put_new(key, canonical(orphan))
         except PreconditionFailed:  # kept already, by the report or by a status check
             return json.loads(self.store.get(key).data)
+        except StorageError as error:  # status checks now see the replacement, so name this one
+            detail = f"operation {operation['id']} was not kept: {REPLACED} ({error})"
+            raise StorageError(detail) from None
         return orphan
 
     def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:

@@ -17,7 +17,7 @@ from studio.state.signing import (
     Refused,
     SimulatedSigningAdapter,
 )
-from studio.state.store import StorageError, digest
+from studio.state.store import StorageError, canonical, digest
 from tests.state.helpers import POLICY, field
 
 
@@ -249,6 +249,88 @@ def test_a_create_reported_after_it_was_declared_failed_is_not_left_failed(
     assert operations.get(approved["id"]) == reported
     with pytest.raises(Conflict, match="check its status"):  # no second, duplicate create
         create(operations, approved)
+
+
+def test_a_create_reported_after_its_replacement_failed_takes_the_slot_back(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock)
+
+    def replaced_by_a_refused_create():
+        clock.advance(minutes=5)
+        operations.check_status(approved["id"])  # FAILED: the first create was not found yet
+        adapter.create_outcome = "refuse"
+        assert create(operations, approved)["state"] == FAILED  # holds nothing
+        adapter.create_outcome = "ok"
+
+    adapter.during_create = replaced_by_a_refused_create
+    first = create(operations, approved)
+    assert first["state"] == CREATED and first["reported_created"]
+    assert operations.get(approved["id"]) == first and first["id"] == adapter.calls[0]
+    assert orphan(services, approved, first["id"]) is None
+    with pytest.raises(Conflict, match="already created"):  # no third create
+        create(operations, approved)
+
+
+def replaced_by_a_create(operations, adapter, clock, approved):
+    """Runs inside the first create: it is declared FAILED, and a second create takes the slot."""
+    clock.advance(minutes=5)
+    operations.check_status(approved["id"])
+    create(operations, approved)
+
+
+def test_an_orphan_kept_already_is_not_written_again(services, clock, approved):
+    operations, adapter = scripted(services, clock)
+    kept = {}
+
+    def replaced_and_kept():
+        replaced_by_a_create(operations, adapter, clock, approved)
+        kept.update(id=adapter.calls[0], note="kept by an earlier report")
+        key = f"templates/{approved['id']}/orphans/{kept['id']}.json"
+        services.store.put_new(key, canonical(kept))
+
+    adapter.during_create = replaced_and_kept
+    assert create(operations, approved) == kept
+    assert orphan(services, approved, kept["id"]) == kept
+
+
+def test_an_orphan_that_cannot_be_kept_is_named_in_the_error(
+    services, clock, approved, monkeypatch
+):
+    operations, adapter = scripted(services, clock)
+    real = services.store.put_new
+
+    def failing(key, data):
+        if "/orphans/" in key:
+            raise StorageError("No space left on device")
+        return real(key, data)
+
+    adapter.during_create = lambda: replaced_by_a_create(operations, adapter, clock, approved)
+    monkeypatch.setattr(services.store, "put_new", failing)
+    with pytest.raises(StorageError, match="resolve by hand") as raised:
+        create(operations, approved)
+    assert adapter.calls[0] in str(raised.value)
+
+
+def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
+    services, clock, approved, monkeypatch
+):
+    operations, _ = scripted(services, clock)
+    real = services.store.replace
+
+    def another_writer_first(key, data, etag):
+        if b'"VERIFYING"' in data:  # each time the create is recorded, another write lands first
+            stored = services.store.get(key)
+            clock.advance(seconds=1)
+            touched = {**json.loads(stored.data), "updated_at": clock().isoformat()}
+            real(key, canonical(touched), stored.etag)
+        return real(key, data, etag)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(services.store, "replace", another_writer_first)
+        with pytest.raises(StorageError, match="check its status .the operation kept changing"):
+            create(operations, approved)
+    assert operations.check_status(approved["id"])["state"] == CREATED
 
 
 def test_a_create_reported_after_its_operation_was_replaced_says_so(services, clock, approved):

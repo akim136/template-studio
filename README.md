@@ -84,8 +84,8 @@ names out; it is not a login, and any process on this machine is answered. A fai
   a new revision, even with identical content, and clears review and approval. Each save carries a
   `save_id` the client chooses (8 to 64 letters, digits, `-` or `_`). A stale base answers 409 with
   the current template; a retry of the same request (same `save_id`, base and content) returns the
-  revision it made instead, while another tab's save of the same content has its own `save_id` and
-  gets 409. Invalid fields answer 422. A storage failure answers 503 and says the save may or may
+  revision it made instead, if nothing was saved on top of it, while another tab's save of the same
+  content has its own `save_id` and gets 409. Invalid fields answer 422. A storage failure answers 503 and says the save may or may
   not have landed, so reload before retrying.
 - `POST .../review` and `POST .../approval` take the `revision` and `binding` (the hash of the
   source, policy and fields). Any other revision or binding is refused as stale (409). Every new
@@ -96,8 +96,9 @@ names out; it is not a login, and any process on this machine is answered. A fai
 - `POST .../operation` creates the template through the simulated adapter, only for the approved
   current revision. An unknown outcome keeps its operation ID and offers only
   `POST .../operation/status-check`; a second create is refused. A create the provider holds wins
-  over a concurrent check that missed it. One reported or found after its operation was replaced is
-  kept under `templates/{id}/orphans/` in the state directory, to resolve by hand.
+  over a concurrent check that missed it. One reported or found after its operation was replaced
+  takes the slot back if the replacement failed; otherwise it is kept under
+  `templates/{id}/orphans/` in the state directory, to resolve by hand.
 
 ## Checks
 

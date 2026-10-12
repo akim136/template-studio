@@ -13,10 +13,10 @@ decisions (guide §10).
 The upload route bounds its own body at MAX_SOURCE_BYTES.
 
 The loopback check keeps other machines (even when the server listens on every interface), other
-sites' pages and rebound host names away from saved state. There is no proxy support: a forwarded
-request comes from the proxy's address and is judged by it. It is not an identity: anyone who can
-run a request on this machine is answered, and the studio has no login of its own (Alex's access
-decision, guide §10).
+sites' pages and rebound host names away from saved state. There is no proxy support. uvicorn
+trusts X-Forwarded-For from a proxy on this machine by default, so a forwarded request is judged
+by the address the proxy reports. It is not an identity: anyone who can run a request on this
+machine is answered, and the studio has no login of its own (Alex's access decision, guide §10).
 """
 
 from __future__ import annotations
