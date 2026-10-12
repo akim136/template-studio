@@ -1,0 +1,33 @@
+{
+  "active_phase": "P0",
+  "guide": "docs/PROJECT_GUIDE.md",
+  "declaration": "docs/phase_change.json",
+  "scope_files": [
+    "docs/phase_scope.json",
+    "scripts/check_repo.py",
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "tests/repo_helpers.py",
+    "tests/test_check_phase.py",
+    "tests/test_check_private.py"
+  ],
+  "features": {
+    "F-P0-foundation": {
+      "summary": "Locked Python/FastAPI skeleton with a truthful /healthz, tests and docs.",
+      "paths": [
+        ".gitignore",
+        ".python-version",
+        "README.md",
+        "pyproject.toml",
+        "uv.lock",
+        "app.py",
+        "docs/design-import.md",
+        "tests/__init__.py",
+        "tests/conftest.py",
+        "tests/test_health.py",
+        "tests/test_repo_contract.py"
+      ]
+    }
+  }
+}

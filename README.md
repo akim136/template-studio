@@ -28,6 +28,7 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 uv run --locked pytest -q
 python3 scripts/check_repo.py private --all-history [--denylist /path/outside/repo]
+python3 scripts/check_repo.py phase --base main   # exit 3 = BOOTSTRAP_REQUIRED (manual gate)
 ```
 
 Without `--denylist`, the private check applies only its generic rules: blocked file types and

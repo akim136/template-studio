@@ -2,17 +2,22 @@
 """Focused repository checks for Homebase Template Studio. Standard library only.
 
   private  Block private inputs and answer-bearing artifacts from the index or history.
+  phase    Check this change against the phase policy read from the base revision.
 
-Exit codes: 0 pass, 1 findings, 2 usage or git error.
+Exit codes: 0 pass, 1 findings, 2 usage or git error, 3 bootstrap required (the
+base has no phase policy, so Alex's manual review is the gate).
 
 These checks back up explicit staging and human review. They do not isolate a
 model from private files. Without the out-of-repo denylist they check only the
-generic rules below, which is all hosted CI can do.
+generic rules below, which is all hosted CI can do. The phase check reads policy
+from the base so a branch cannot widen its own scope, but a branch can still edit
+this script; the merge gate therefore runs the base revision's copy.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -38,6 +43,8 @@ BLOCKED_EXTENSIONS = {
 }
 PRIVATE_DIRS = {"private", "evaluator", "overlays", "_incoming"}
 PRIVATE_NAME = re.compile(r"^(access_roster|template_baseline_|build_fields_)|^\.env($|\.)", re.I)
+POLICY_PATH = "docs/phase_scope.json"
+BOOTSTRAP_REQUIRED = 3
 
 
 class CheckError(Exception):
@@ -196,6 +203,122 @@ def run_private(args: argparse.Namespace) -> int:
     return 0
 
 
+def read_json(repo: str, ref: str, path: str) -> dict | None:
+    """Return the JSON object at ref:path, or None when the file is absent there."""
+    spec = f"{ref}:{path}"
+    absent = subprocess.run(["git", "-C", repo, "cat-file", "-e", spec], capture_output=True)
+    if absent.returncode != 0:
+        return None
+    try:
+        value = json.loads(git(repo, "show", spec))
+    except json.JSONDecodeError as error:
+        raise CheckError(f"{spec} is not valid JSON: {error.msg}") from None
+    if not isinstance(value, dict):
+        raise CheckError(f"{spec} must be a JSON object")
+    return value
+
+
+def is_str_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def load_policy(repo: str, ref: str) -> dict | None:
+    policy = read_json(repo, ref, POLICY_PATH)
+    if policy is None:
+        return None
+    features = policy.get("features")
+    if not (
+        all(isinstance(policy.get(key), str) for key in ("active_phase", "guide", "declaration"))
+        and is_str_list(policy.get("scope_files"))
+        and isinstance(features, dict)
+        and features
+        and all(isinstance(f, dict) and is_str_list(f.get("paths")) for f in features.values())
+    ):
+        raise CheckError(f"{ref}:{POLICY_PATH} is malformed")
+    return policy
+
+
+def covered(path: str, patterns: list[str]) -> bool:
+    """Exact file match, or prefix match for entries ending in '/'."""
+    return any(path == p or (p.endswith("/") and path.startswith(p)) for p in patterns)
+
+
+def run_phase(args: argparse.Namespace) -> int:
+    repo, base = args.repo, args.base
+    try:
+        base_sha = git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").decode()
+    except CheckError:
+        raise CheckError(f"unknown base revision {base!r}") from None
+    policy = load_policy(repo, base)
+    if policy is None:
+        proposed = load_policy(repo, "HEAD")
+        head = (
+            f"HEAD proposes active phase {proposed['active_phase']}"
+            if proposed
+            else ("HEAD has no policy either")
+        )
+        print(f"BOOTSTRAP_REQUIRED: {base} has no {POLICY_PATH}; {head}.")
+        print("No trusted base policy exists. Alex's manual review is the gate.")
+        return BOOTSTRAP_REQUIRED
+
+    active, guide, decl_path = policy["active_phase"], policy["guide"], policy["declaration"]
+    changed = [
+        p
+        for p in git(repo, "diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD")
+        .decode()
+        .split("\0")
+        if p
+    ]
+    findings = []
+    if guide not in changed:
+        findings.append(f"the guide {guide} was not amended")
+    if decl_path not in changed:
+        findings.append(f"the declaration {decl_path} was not refreshed")
+    declaration = read_json(repo, "HEAD", decl_path) or {}
+    kind, features = declaration.get("kind"), declaration.get("features", [])
+    if declaration.get("phase") != active:
+        findings.append(
+            f"declared phase {declaration.get('phase')!r} does not match active phase {active!r}"
+        )
+    if not is_str_list(features):
+        findings.append("features must be a list of feature IDs")
+        features = []
+
+    operational = [p for p in changed if p not in (guide, decl_path)]
+    scope = policy["scope_files"]
+    if kind == "feature":
+        if not features:
+            findings.append("a feature change must declare at least one feature")
+        allowed = []
+        for feature in features:
+            if feature not in policy["features"]:
+                findings.append(f"unknown feature {feature!r}")
+            else:
+                allowed += policy["features"][feature]["paths"]
+        for path in operational:
+            if covered(path, scope):
+                findings.append(f"scope file {path} changes only with kind: scope_update")
+            elif not covered(path, allowed):
+                findings.append(f"{path} is outside the declared features")
+    elif kind == "scope_update":
+        if features:
+            findings.append("a scope_update declares no features")
+        for path in operational:
+            if not covered(path, scope):
+                findings.append(f"scope_update cannot bundle operational change {path}")
+    else:
+        findings.append(f"kind must be 'feature' or 'scope_update', not {kind!r}")
+
+    where = f"base {base} {base_sha[:12]}"
+    if findings:
+        print(f"PHASE CHECK FAILED ({where}):")
+        for finding in findings:
+            print(f"  {finding}")
+        return 1
+    print(f"phase check passed: {kind} in {active} ({where}, {len(changed)} changed path(s))")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=".", help="repository path (default: .)")
@@ -213,9 +336,12 @@ def main(argv: list[str] | None = None) -> int:
         "--denylist", help="out-of-repo file of exact confidential tokens, one per line"
     )
 
+    phase = commands.add_parser("phase", help="check this change against the base phase policy")
+    phase.add_argument("--base", required=True, help="trusted base revision, e.g. main")
+
     args = parser.parse_args(argv)
     try:
-        return run_private(args)
+        return run_private(args) if args.command == "private" else run_phase(args)
     except CheckError as error:
         print(f"check_repo: {error}", file=sys.stderr)
         return 2
