@@ -4,5 +4,5 @@
   "features": [
     "F-P2-state-boundary"
   ],
-  "summary": "Records the hosted worst-case upload on production (400 pages, 24.37 MiB, sealed in 14.8 s, COMPLETE), the PR #9 merge, the project-wide sign-in callback and the removed branch-scoped settings."
+  "summary": "Records the non-listed-user access test on production: an account outside the team got Vercel's access page and no app output."
 }
