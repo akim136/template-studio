@@ -10,14 +10,15 @@ from app import app
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_healthz_reports_truthful_p0_status() -> None:
+def test_healthz_reports_truthful_status() -> None:
     with TestClient(app) as client:  # runs startup and shutdown
         response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "phase": "P0", "analysis": "NOT_IMPLEMENTED"}
+    assert response.json() == {"status": "ok", "analysis": "NOT_IMPLEMENTED"}
 
 
 def test_no_other_routes_are_exposed() -> None:
+    assert {route.path for route in app.routes} == {"/healthz"}
     client = TestClient(app)
     for path in ("/", "/docs", "/redoc", "/openapi.json", "/api/analyze"):
         assert client.get(path).status_code == 404, path

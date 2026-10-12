@@ -1,12 +1,12 @@
-"""Homebase Template Studio entrypoint (P0 foundation).
+"""Homebase Template Studio entrypoint.
 
 Only the liveness route exists. Its body reports what is actually implemented,
-so no reviewer or client infers an analysis capability that is absent.
+so no reviewer or client infers an analysis capability that is absent. The
+active phase lives in docs/phase_scope.json, not here.
 """
 
 from fastapi import FastAPI
 
-PHASE = "P0"
 ANALYSIS_STATUS = "NOT_IMPLEMENTED"
 
 app = FastAPI(
@@ -19,4 +19,4 @@ app = FastAPI(
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    return {"status": "ok", "phase": PHASE, "analysis": ANALYSIS_STATUS}
+    return {"status": "ok", "analysis": ANALYSIS_STATUS}

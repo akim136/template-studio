@@ -14,11 +14,13 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_app_policy_and_declaration_agree_on_p0() -> None:
+def test_policy_declaration_and_app_agree() -> None:
     policy = json.loads(read("docs/phase_scope.json"))
     declaration = json.loads(read(policy["declaration"]))
 
-    assert app.PHASE == policy["active_phase"] == declaration["phase"] == "P0"
+    # The phase lives only in the policy, so a scope_update can advance it without app changes.
+    assert policy["active_phase"] == declaration["phase"] == "P0"
+    assert not hasattr(app, "PHASE")
     assert app.ANALYSIS_STATUS == "NOT_IMPLEMENTED"
     assert set(declaration["features"]) <= set(policy["features"])
 
