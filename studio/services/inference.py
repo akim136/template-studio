@@ -8,9 +8,16 @@ module, the page image rendered from the source, the page's text layer, and the 
 candidates. Stage B also receives its own stage A fields and the same image with those fields
 drawn on it. No file other than the source is read to build a request, and no tools are offered.
 
+Before any page is sent, one preflight call with no page content proves the route. The gateway
+cannot be told to refuse a fallback from Alex's key to Vercel's credentials, so the route is
+also checked on every answer, and a violation stops the run; calls already in flight when it
+happens (at most `workers`) have been sent. A rotated page is not sent: its fields need an
+audited normalizer first.
+
 Stage A and stage B are separate, immutable records. A page whose stage B failed has no final
 fields; stage A is never substituted for it. Rendering a page is not inspection: a page counts as
-inspected only when the model's answer for it was received and parsed.
+inspected only when the model's answer for it was received and parsed. A run is COMPLETE only
+when every page was inspected, no final field was rejected and nothing stopped the run.
 """
 
 from __future__ import annotations
@@ -41,6 +48,8 @@ PROFILE = "PROVISIONAL_DEVELOPMENT"
 MODEL_IMAGE_SHORT_SIDE = 768  # pixels: the size a high-detail page image is viewed at
 MAX_TEXT_CHARS = 8000  # page text beyond this is cut, and the cut is recorded
 MAX_OUTPUT_TOKENS = 6000
+PREFLIGHT_TEXT = "Route check. Return an empty field list and empty notes."
+PREFLIGHT_OUTPUT_TOKENS = 1000
 
 RULES = """Business rules (provisional development policy):
 - Roles: {roles}. "sender" is the party that prepares the document before it is sent.
@@ -94,11 +103,13 @@ class PageEvidence:
     candidates: int = 0
     candidates_note: str = ""
     image_sha256: str | None = None  # of the PNG submitted in stage A
-    image_size_px: tuple[int, int] | None = None
+    image_size_px: list[int] | None = None
     scale: float | None = None  # image pixels per source point
+    geometry_note: str = ""  # set when the visible area differs from the media box
     stage_a: str = "NOT_RUN"
     stage_b: str = "NOT_RUN"
     inspected: bool = False  # the model's answer for this page was received and parsed
+    final_rejected: int = 0  # final (stage B) fields rejected as invalid
     calls: list[dict] = field(default_factory=list)
 
 
@@ -112,12 +123,19 @@ class StageOutput:
 
 
 class _Stop:
+    """Why the run stopped. The first reason wins, except that a route violation outranks any
+    other: it is the one a reader must not miss."""
+
     def __init__(self):
-        self.event, self.reason = threading.Event(), ""
+        self.event, self.reason, self.lock = threading.Event(), "", threading.Lock()
 
     def set(self, reason: str):
-        if not self.event.is_set():
-            self.reason = reason
+        with self.lock:
+            violation = "route violation"
+            if not self.reason or (
+                reason.startswith(violation) and not self.reason.startswith(violation)
+            ):
+                self.reason = reason
             self.event.set()
 
 
@@ -161,6 +179,58 @@ class Runner:
         self.observed: set[tuple[str, str, str]] = set()
         self.lock = threading.Lock()
 
+    def _guard(self, call):
+        """(status, result) of one model call. A failure is recorded; one that concerns the route
+        or the budget, or would repeat on every call, also stops the run."""
+        if self.stop.event.is_set():
+            return f"NOT_RUN: {self.stop.reason}", None
+        try:
+            return "RECEIVED", call()
+        except gateway.RouteViolation as error:
+            self.stop.set(f"route violation: {error}")
+            return f"ROUTE_VIOLATION: {error}", None
+        except BudgetExceeded as error:
+            self.stop.set(f"budget: {error}")
+            return f"BUDGET_STOPPED: {error}", None
+        except gateway.GatewayError as error:
+            if error.fatal:
+                self.stop.set(f"gateway: {error}")
+            return f"FAILED: {error}", None
+        except Exception as error:  # unexpected: stop rather than repeat it on every page
+            self.stop.set(f"error: {type(error).__name__}")
+            return f"FAILED: {type(error).__name__}: {error}", None
+
+    def _observe(self, result):
+        with self.lock:
+            self.observed.add(
+                (result.observed_model, result.observed_provider, result.observed_credential)
+            )
+
+    def preflight(self) -> dict:
+        """One call with no page content, so a wrong route is found before any page is sent."""
+        route = self.config.route
+
+        def call():
+            return gateway.call(
+                route,
+                [{"role": "user", "content": PREFLIGHT_TEXT}],
+                stage_schema(self.config.roles, False),
+                token=self.token,
+                ledger=self.ledger,
+                label=f"{self.run_id} preflight",
+                worst_case=gateway.worst_case_usd(
+                    route, len(PREFLIGHT_TEXT), 0, PREFLIGHT_OUTPUT_TOKENS
+                ),
+                max_output_tokens=PREFLIGHT_OUTPUT_TOKENS,
+                transport=self.transport,
+            )
+
+        status, result = self._guard(call)
+        if result is None:
+            return {"status": status}
+        self._observe(result)
+        return {"status": "PASSED", "generation_id": result.generation_id}
+
     def _call(self, evidence, stage, system, user_text, png, self_check):
         roles = self.config.roles
         messages = [
@@ -187,10 +257,7 @@ class Runner:
             max_output_tokens=MAX_OUTPUT_TOKENS,
             transport=self.transport,
         )
-        with self.lock:
-            self.observed.add(
-                (result.observed_model, result.observed_provider, result.observed_credential)
-            )
+        self._observe(result)
         evidence.calls.append(
             {
                 "stage": stage,
@@ -207,24 +274,17 @@ class Runner:
 
     def _stage(self, evidence, stage, system, text, png, candidates, scale, size, self_check):
         """Run one stage on one page; returns the output or None, recording why in evidence."""
-        if self.stop.event.is_set():
-            return f"NOT_RUN: {self.stop.reason}", None
-        try:
-            content = self._call(evidence, stage, system, text, png, self_check)
-        except BudgetExceeded as error:
-            self.stop.set(f"budget: {error}")
-            return f"BUDGET_STOPPED: {error}", None
-        except gateway.RouteViolation as error:
-            self.stop.set(f"route violation: {error}")
-            return f"ROUTE_VIOLATION: {error}", None
-        except gateway.GatewayError as error:
-            return f"FAILED: {error}", None
+        status, content = self._guard(
+            lambda: self._call(evidence, stage, system, text, png, self_check)
+        )
+        if content is None:
+            return status, None
         try:
             answer = json.loads(content)
             fields, rejected = resolve(
                 evidence.page, answer["fields"], self.config.roles, candidates, scale, size
             )
-        except (ValueError, KeyError, TypeError) as error:
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
             return f"FAILED: unusable answer: {type(error).__name__}: {error}", None
         output = StageOutput(
             fields=fields,
@@ -236,16 +296,50 @@ class Runner:
         return "RECEIVED", output
 
     def page(self, number: int, page_candidates: PageCandidates):
+        """One page, start to finish. An unexpected failure is recorded on the page and stops
+        the run, so the run still ends with a record; a received stage A is kept."""
+        evidence, done = PageEvidence(page=number), {}
+        try:
+            return self._page(evidence, done, number, page_candidates)
+        except Exception as error:
+            self.stop.set(f"error: {type(error).__name__}")
+            failed = f"FAILED: {type(error).__name__}: {error}"
+            if "a" in done:
+                evidence.stage_b = failed
+            else:
+                evidence.stage_a = failed
+            evidence.inspected = False
+            return evidence, done.get("a"), None
+
+    def _page(self, evidence: PageEvidence, done: dict, number: int, page_candidates):
         record = self.analysis.pages[number - 1]
-        evidence = PageEvidence(page=number, text_chars=len(record.text))
+        evidence.text_chars = len(record.text)
         evidence.candidates = len(page_candidates.candidates)
+        notes = [page_candidates.reason] if page_candidates.reason else []
         if page_candidates.truncated_from:
-            evidence.candidates_note = f"cut from {page_candidates.truncated_from}"
-        evidence.candidates_note = evidence.candidates_note or page_candidates.reason
-        if record.image is None or record.width_pt is None or record.height_pt is None:
+            notes.insert(0, f"cut from {page_candidates.truncated_from}")
+        evidence.candidates_note = "; ".join(notes)
+        if self.stop.event.is_set():
+            evidence.stage_a = f"NOT_RUN: {self.stop.reason}"
+            return evidence, None, None
+        if page_candidates.rotation or record.rotation:
+            evidence.stage_a = "NOT_RUN: rotated page; its fields need an audited normalizer"
+            return evidence, None, None
+        if record.image is None:
             evidence.stage_a = f"NOT_RUN: no page image ({record.image_reason})"
             return evidence, None, None
-        size = (record.width_pt, record.height_pt)
+        # The visible area as PDFium renders it: the image, the candidates and the fields all
+        # use this frame, measured from its top-left corner.
+        size = (page_candidates.width_pt, page_candidates.height_pt)
+        if min(size) <= 0:
+            evidence.stage_a = f"NOT_RUN: the page was not measured ({page_candidates.reason})"
+            return evidence, None, None
+        media = (record.width_pt, record.height_pt)
+        if None not in media and max(abs(a - b) for a, b in zip(size, media, strict=True)) > 0.5:
+            evidence.geometry_note = (
+                f"the visible area is {size[0]:g} x {size[1]:g} pt and the media box "
+                f"{media[0]:g} x {media[1]:g} pt; coordinates are from the visible area"
+            )
         scale = MODEL_IMAGE_SHORT_SIDE / min(size)
         try:
             image = render_rgb(self.source, number, scale)
@@ -254,7 +348,7 @@ class Runner:
             return evidence, None, None
         png = encode_png(image)
         evidence.image_sha256 = hashlib.sha256(png).hexdigest()
-        evidence.image_size_px, evidence.scale = (image.width, image.height), round(scale, 4)
+        evidence.image_size_px, evidence.scale = [image.width, image.height], round(scale, 4)
 
         text = record.text[:MAX_TEXT_CHARS]
         evidence.text_sent_chars = len(text)
@@ -270,8 +364,9 @@ class Runner:
         )
         if stage_a is None:
             return evidence, None, None
-        if not stage_a.fields and not candidates:
-            evidence.stage_b = "NOT_NEEDED: no draft fields and no candidates"
+        done["a"] = stage_a
+        if not stage_a.fields and not stage_a.rejected and not candidates:
+            evidence.stage_b = "NOT_NEEDED: no draft fields, no rejected fields, no candidates"
             evidence.inspected = True
             return evidence, stage_a, StageOutput([], [], "", [], "")
         boxes = [
@@ -292,6 +387,7 @@ class Runner:
             True,
         )
         evidence.inspected = stage_b is not None
+        evidence.final_rejected = len(stage_b.rejected) if stage_b is not None else 0
         return evidence, stage_a, stage_b
 
 
@@ -300,9 +396,10 @@ def _status(stop: _Stop, evidence: list[PageEvidence], analysis: AnalysisResult)
         return "ROUTE_VIOLATION"
     if stop.reason.startswith("budget"):
         return "BUDGET_STOPPED"
-    done = all(e.inspected for e in evidence)
+    done = all(e.inspected and not e.final_rejected for e in evidence)
     every_page = len(evidence) == analysis.page_count
-    return "COMPLETE" if done and every_page and analysis.inventory == "COMPLETE" else "PARTIAL"
+    complete = done and every_page and analysis.inventory == "COMPLETE" and not stop.reason
+    return "COMPLETE" if complete else "PARTIAL"
 
 
 def run(
@@ -317,11 +414,21 @@ def run(
 ) -> dict:
     if hashlib.sha256(source).hexdigest() != analysis.source_sha256:
         raise ValueError("the analysis is of a different source")
-    numbers = config.pages or list(range(1, analysis.page_count + 1))
+    if config.workers < 1:
+        raise ValueError("workers must be at least 1")
+    count = len(analysis.pages)
+    numbers = list(range(1, count + 1)) if config.pages is None else list(config.pages)
+    if (
+        not numbers
+        or len(set(numbers)) != len(numbers)
+        or not all(1 <= n <= count for n in numbers)
+    ):
+        raise ValueError(f"pages must be unique and within 1..{count}, got {numbers}")
     candidates = {page.page: page for page in extract_candidates(source)}
     runner = Runner(
         source, analysis, config, token=token, ledger=ledger, transport=transport, run_id=run_id
     )
+    preflight = runner.preflight()
     with ThreadPoolExecutor(max_workers=config.workers) as pool:
         futures = [
             pool.submit(runner.page, n, candidates.get(n, PageCandidates(n, [], reason="none")))
@@ -333,12 +440,13 @@ def run(
     final_pages = [e.page for e, _, b in results if b is not None]
     a_fields = [f for _, a, _ in results if a is not None for f in a.fields]
     b_fields = [f for _, _, b in results if b is not None for f in b.fields]
+    measured = {n: (c.width_pt, c.height_pt) for n, c in candidates.items() if c.width_pt}
     pages_meta = [
         {
             "document_index": 0,
             "page": p.page,
-            "width": p.width_pt,
-            "height": p.height_pt,
+            "width": measured.get(p.page, (p.width_pt, p.height_pt))[0],
+            "height": measured.get(p.page, (p.width_pt, p.height_pt))[1],
             "rotation": p.rotation,
         }
         for p in analysis.pages
@@ -358,6 +466,7 @@ def run(
         "stop_reason": runner.stop.reason,
         "route": {"model": config.route.model, "credential": config.route.credential},
         "observed_routes": sorted(list(route) for route in runner.observed),
+        "preflight": preflight,
         "source_sha256": analysis.source_sha256,
         "analysis_inventory": analysis.inventory,
         "pages_requested": numbers,
@@ -369,6 +478,7 @@ def run(
             "envelope": envelope(**common, fields=a_fields, output_stage="A"),
             "fields": [field_dict(f) for f in a_fields],
             "rejected": [r for _, a, _ in results if a is not None for r in a.rejected],
+            "notes": {e.page: a.notes for e, a, _ in results if a is not None},
             "raw": {e.page: a.raw for e, a, _ in results if a is not None},
         },
         "stage_b": {
@@ -376,6 +486,7 @@ def run(
             "fields": [field_dict(f) for f in b_fields],
             "rejected": [r for _, _, b in results if b is not None for r in b.rejected],
             "changes": {e.page: b.changes for e, _, b in results if b is not None},
+            "notes": {e.page: b.notes for e, _, b in results if b is not None},
             "raw": {e.page: b.raw for e, _, b in results if b is not None},
         },
         "spend": {"run_usd": round(run_total, 6), "all_runs_usd": round(all_total, 6)},

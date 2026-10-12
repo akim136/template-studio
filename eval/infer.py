@@ -5,8 +5,9 @@
         --ledger PRIVATE/spend-ledger.jsonl --env-file PRIVATE/.env.local --out PRIVATE/run.json
 
 Every route choice is explicit; there are no defaults for model, credential or caps. The full
-record (it contains source text and model answers) goes to --out, outside the repository, and is
-made read-only. Stdout carries one JSON summary with counts and spend only.
+record (it contains source text and model answers) goes to --out, outside the repository; it is
+created owner-only and then made read-only (0400). Stdout carries one JSON summary with counts and
+spend only.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import hashlib
 import json
 import os
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from eval.analyze import read_source, stdout_to_stderr
@@ -34,14 +36,25 @@ def _outside_repo(path: Path) -> Path:
     return resolved
 
 
-def _pages(text: str | None) -> list[int] | None:
-    if not text:
-        return None
+def _pages(text: str) -> list[int]:
     pages = set()
     for part in text.split(","):
         first, _, last = part.partition("-")
-        pages.update(range(int(first), int(last or first) + 1))
+        first, last = int(first), int(last or first)
+        if first < 1 or last < first:
+            raise ValueError(f"{part} is not a page range")
+        pages.update(range(first, last + 1))
     return sorted(pages)
+
+
+def _usd(text: str) -> Decimal:
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        raise ValueError(f"{text} is not an amount") from None
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"{text} is not a positive amount")
+    return value
 
 
 def _summary(record: dict) -> dict:
@@ -52,6 +65,7 @@ def _summary(record: dict) -> dict:
         "profile": record["profile"],
         "route": record["route"],
         "observed_routes": record["observed_routes"],
+        "preflight": record["preflight"]["status"],
         "pages_requested": len(record["pages_requested"]),
         "pages_inspected": sum(1 for e in evidence if e["inspected"]),
         "stage_a_fields": len(record["stage_a"]["fields"]),
@@ -70,11 +84,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--credential", required=True, choices=["byok", "system"])
     parser.add_argument("--roles", required=True, help="comma-separated, in signer-index order")
     parser.add_argument("--signer-mode", required=True)
-    parser.add_argument("--run-cap", required=True, type=float, help="USD for this run")
+    parser.add_argument("--run-cap", required=True, type=_usd, help="USD for this run")
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--env-file", type=Path, help="holds VERCEL_OIDC_TOKEN when not in env")
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--pages", help="e.g. 1-3,7; default every page")
+    parser.add_argument("--pages", type=_pages, help="e.g. 1-3,7; default every page")
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args(argv)
 
@@ -87,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         roles=[role.strip() for role in args.roles.split(",")],
         signer_mode=args.signer_mode,
         workers=args.workers,
-        pages=_pages(args.pages),
+        pages=args.pages,
     )
     token = gateway.read_token(args.env_file)
 
@@ -103,10 +117,18 @@ def main(argv: list[str] | None = None) -> int:
         stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
         run_id = f"{stamp}-{sha[:8]}-{route.model.split('/')[-1]}"
         ledger = SpendLedger(ledger_path, run_id, args.run_cap)
-        record = inference.run(source, analysis, config, token=token, ledger=ledger, run_id=run_id)
+        try:
+            record = inference.run(
+                source, analysis, config, token=token, ledger=ledger, run_id=run_id
+            )
+        except ValueError as error:  # refused before any call: bad pages or a mismatched source
+            print(f"not run: {error}", file=sys.stderr)
+            return 2
         record["run_id"] = run_id
-    out.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    os.chmod(out, 0o444)
+    descriptor = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with open(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2)
+    os.chmod(out, 0o400)
     json.dump({"run_id": run_id, **_summary(record)}, stdout, indent=2)
     stdout.write("\n")
     return 0 if record["status"] == "COMPLETE" else 1

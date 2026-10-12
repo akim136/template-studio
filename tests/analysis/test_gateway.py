@@ -1,5 +1,8 @@
+import io
 import json
 import threading
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -156,3 +159,56 @@ def test_a_route_needs_a_priced_model_and_a_named_credential():
         gateway.Route("openai/unpriced", "byok")
     with pytest.raises(ValueError, match="credential"):
         gateway.Route("openai/gpt-4.1", "either")
+
+
+def test_network_errors_become_gateway_errors(monkeypatch):
+    def unreachable(*args, **kwargs):
+        raise urllib.error.URLError("synthetic: connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", unreachable)
+    with pytest.raises(gateway.GatewayError) as error:
+        gateway.urllib_transport(gateway.CHAT_URL, b"{}", {})
+    assert not error.value.fatal
+
+
+def test_an_http_error_keeps_only_its_status_and_error_code(monkeypatch):
+    body = b'{"error": {"type": "authentication_error", "message": "Bearer abc.def.ghi rejected"}}'
+
+    def denied(*args, **kwargs):
+        raise urllib.error.HTTPError(gateway.CHAT_URL, 401, "Unauthorized", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(urllib.request, "urlopen", denied)
+    with pytest.raises(gateway.GatewayError) as error:
+        gateway.urllib_transport(gateway.CHAT_URL, b"{}", {})
+    assert str(error.value) == "HTTP 401 from the gateway (authentication_error)"
+    assert error.value.fatal  # a bad token fails every call: stop, do not retry page by page
+
+
+@pytest.mark.parametrize("reply", [b"not json", b'{"choices": []}', b'{"choices": [{}]}'])
+def test_a_malformed_response_is_fatal_and_keeps_the_worst_case(tmp_path, reply):
+    book = ledger(tmp_path)
+    with pytest.raises(gateway.GatewayError) as error:
+        call(book, lambda url, body, headers: reply, worst=0.05)
+    assert error.value.fatal and "route cannot be checked" in str(error.value)
+    assert book.totals() == (0.05, 0.05)
+
+
+def test_the_ledger_adds_money_exactly(tmp_path):
+    book = ledger(tmp_path, run_cap=0.3)
+    for _ in range(3):
+        book.reserve(0.1, "exact")  # binary floats would refuse the third: 0.30000000000000004
+    with pytest.raises(BudgetExceeded):
+        book.reserve(0.000001, "over")
+
+
+def test_the_ledger_file_is_owner_only(tmp_path):
+    book = ledger(tmp_path)
+    book.reserve(0.01, "mode")
+    assert book.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_call_that_costs_more_than_its_reservation_stops_the_run(tmp_path):
+    book = ledger(tmp_path)
+    with pytest.raises(BudgetExceeded, match="above its reserved worst case"):
+        call(book, FakeGateway(market=0.5), worst=0.05)
+    assert book.totals() == (0.5, 0.5)  # the real cost is recorded, not the estimate

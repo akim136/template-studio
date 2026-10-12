@@ -71,9 +71,20 @@ def first_candidate_answer(body: dict) -> dict:
     return answer
 
 
+def page_of(body: dict) -> int | None:
+    """The page a chat request is about, or None for the route preflight (no page content)."""
+    content = body["messages"][-1]["content"]
+    if not isinstance(content, list):
+        return None
+    return int(content[0]["text"].split("Page ", 1)[1].split(".", 1)[0])
+
+
 class FakeGateway:
-    def __init__(self, answer=first_candidate_answer, fail_stage_b=False, lookup=0.003, **kw):
+    def __init__(
+        self, answer=first_candidate_answer, fail_stage_b=False, lookup=0.003, fail=None, **kw
+    ):
         self.answer, self.fail_stage_b, self.lookup, self.kw = answer, fail_stage_b, lookup, kw
+        self.fail = fail  # body -> an exception to raise for that chat call, or None
         self.requests: list[tuple[str, dict | None, dict]] = []
 
     def __call__(self, url: str, body: bytes | None, headers: dict) -> bytes:
@@ -83,7 +94,10 @@ class FakeGateway:
             return json.dumps({"data": {"market_cost": self.lookup}}).encode()
         schema = payload["response_format"]["json_schema"]["schema"]
         if self.fail_stage_b and "changes" in schema["properties"]:
-            raise gateway.GatewayError("HTTP 500 from the gateway: synthetic failure")
+            raise gateway.GatewayError("HTTP 500 from the gateway (synthetic)")
+        error = self.fail(payload) if self.fail else None
+        if error is not None:
+            raise error
         return json.dumps(response(json.dumps(self.answer(payload)), **self.kw)).encode()
 
     def chat_bodies(self) -> list[dict]:

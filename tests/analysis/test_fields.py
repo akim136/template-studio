@@ -2,7 +2,9 @@ import io
 
 import pytest
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import RectangleObject
 
+from studio.services import candidates as candidates_module
 from studio.services.candidates import Candidate, extract_candidates
 from studio.services.fields import COORDINATE_SPACE, envelope, resolve, stage_schema
 from studio.services.overlay import COLORS, draw_boxes
@@ -130,3 +132,26 @@ def test_the_overlay_outlines_each_field_in_its_type_color_and_numbers_it():
     assert pixel(100, 60) == (255, 255, 255)  # inside stays clear
     assert any(pixel(x, y) == COLORS["signature"] for x in range(50, 70) for y in range(19, 40))
     assert white.rows[79] == b"\xff" * 600  # the source image is not modified
+
+
+def test_a_box_hanging_off_the_page_is_clipped_not_shifted():
+    box = {"left": -20, "top": -10, "width": 100, "height": 30}
+    (field,), _ = resolve(1, [raw(box=box)], ROLES, [], 1.0, (612, 792))
+    assert (field.x, field.y, field.width, field.height) == (0.0, 0.0, 80.0, 20.0)
+
+
+def test_candidates_are_measured_from_the_visible_area_and_report_its_size():
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(make_pdf([FORM]))))
+    writer.pages[0].cropbox = RectangleObject([50, 100, 450, 700])
+    out = io.BytesIO()
+    writer.write(out)
+    page = extract_candidates(out.getvalue())[0]
+    assert (page.width_pt, page.height_pt) == (400.0, 600.0)
+    rule = next(c for c in page.candidates if c.kind == "rule")
+    assert rule.x == pytest.approx(71 - 50, abs=1) and rule.y == pytest.approx(700 - 651, abs=1)
+
+
+def test_the_shape_scan_stops_at_its_limit_and_says_so(monkeypatch):
+    monkeypatch.setattr(candidates_module, "SCAN_LIMIT", 1)
+    page = extract_candidates(make_pdf([FORM]))[0]
+    assert len(page.candidates) <= 3 and "scan stopped" in page.reason

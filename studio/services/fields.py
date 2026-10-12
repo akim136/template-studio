@@ -111,11 +111,11 @@ def _geometry(raw, kind, candidate, scale, page_size):
         return candidate.x, round(bottom - height, 2), candidate.width, height, "candidate"
     # No candidate, or a checkbox anchored to a line: the model's own box.
     box = raw["box"]
-    x, y = box["left"] / scale, box["top"] / scale
-    width, height = box["width"] / scale, box["height"] / scale
+    left, top = box["left"] / scale, box["top"] / scale
+    right, bottom = left + box["width"] / scale, top + box["height"] / scale
     page_width, page_height = page_size
-    x, y = max(x, 0.0), max(y, 0.0)
-    width, height = min(width, page_width - x), min(height, page_height - y)
+    x, y = max(left, 0.0), max(top, 0.0)  # clip each edge to the page; never shift the box
+    width, height = min(right, page_width) - x, min(bottom, page_height) - y
     if width <= 0 or height <= 0:
         return "the box has no area inside the page"
     return round(x, 2), round(y, 2), round(width, 2), round(height, 2), "model_box"
