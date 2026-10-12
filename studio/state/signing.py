@@ -339,7 +339,8 @@ class Operations:
         """Records that the create's outcome is unknown, like `_record` records a create,
         whatever a concurrent status check did meanwhile. One that declared it FAILED (the call
         outlasted the grace period) looked before the create may have landed, so the operation
-        is reopened, and the grace period runs again from now (`returned_at`)."""
+        is reopened, and the grace period runs again from now (`returned_at`). One a status check
+        left waiting on another check keeps its note but also gets `returned_at`."""
         now = self._now()
         changes = {"note": f"create outcome unknown ({error})", "returned_at": now}
         current = operation
@@ -349,10 +350,13 @@ class Operations:
                 return current  # found, created, then replaced by a later revision's create
             if replaced and (current["state"] != FAILED or _ids(current) != _ids(operation)):
                 return self._orphan(operation, None, note=f"{changes['note']}; {REPLACED}")
-            if not replaced and current["state"] not in (CREATING, FAILED):
-                return current  # found, or already waiting on a status check: its state stands
-            mine = operation if replaced else current
-            reopened = {**mine, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": now}
+            if not replaced and current["state"] == NEEDS_STATUS_CHECK:
+                reopened = {**current, "returned_at": now, "updated_at": now}
+            elif not replaced and current["state"] not in (CREATING, FAILED):
+                return current  # found meanwhile: its state stands
+            else:
+                mine = operation if replaced else current
+                reopened = {**mine, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": now}
             try:
                 self.store.replace(key, canonical(reopened), etag)
             except PreconditionFailed:

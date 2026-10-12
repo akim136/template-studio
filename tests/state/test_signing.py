@@ -282,6 +282,27 @@ def test_an_unknown_outcome_after_it_was_declared_failed_reopens_it(
     assert operations.check_status(approved["id"])["state"] == FAILED
 
 
+def test_an_unknown_outcome_after_a_failed_lookup_still_starts_the_grace_period(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-before")
+
+    def failed_lookup():
+        adapter.find_outcome = "error"  # a check that cannot reach the provider waits on another
+        assert operations.check_status(approved["id"])["state"] == NEEDS_STATUS_CHECK
+        adapter.find_outcome = "ok"
+        clock.advance(minutes=5)  # the call outlasts the grace period counted from its start
+
+    adapter.during_create = failed_lookup
+    unknown = create(operations, approved)
+    assert unknown["state"] == NEEDS_STATUS_CHECK and unknown["returned_at"]
+    assert "status unknown" in unknown["note"]  # the check's note stands
+    early = operations.check_status(approved["id"])  # the grace runs from when the call returned
+    assert early["state"] == NEEDS_STATUS_CHECK and "may still be running" in early["note"]
+    clock.advance(minutes=2)
+    assert operations.check_status(approved["id"])["state"] == FAILED
+
+
 def test_an_unknown_outcome_after_its_operation_was_replaced_is_kept_as_an_orphan(
     services, clock, approved
 ):
