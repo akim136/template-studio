@@ -551,7 +551,7 @@
     renderOperation();
 
     const confirm = $("[data-pf-confirm]");
-    confirm.checked = Boolean(saved.review);
+    confirm.checked = Boolean(saved.review) || working === "review";
     confirm.disabled = Boolean(saved.review) || unsaved || saved.issues.length > 0 || Boolean(working);
     $("[data-pf-confirm-label]").textContent = saved.review ? `Review confirmed for revision ${saved.revision}` : `I reviewed every field on revision ${saved.revision}`;
     $("[data-pf-confirm-help]").textContent = saved.review
