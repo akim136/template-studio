@@ -1,5 +1,5 @@
 {
-  "active_phase": "P2",
+  "active_phase": "P3",
   "guide": "docs/PROJECT_GUIDE.md",
   "declaration": "docs/phase_change.json",
   "scope_files": [
@@ -54,6 +54,22 @@
         "studio/",
         "tests/state/",
         "tests/test_health.py"
+      ]
+    },
+    "F-P3-core-ui": {
+      "summary": "The selected core interface (PR4, feat/studio-core-ui): library, setup, analyzing, editor and record screens translated from the approved design-import rows, with real upload, analysis, save, review and approval, and a simulated create. No login screen, model UI or fixture fields.",
+      "paths": [
+        ".gitignore",
+        "README.md",
+        "pyproject.toml",
+        "uv.lock",
+        "app.py",
+        "studio/",
+        "templates/",
+        "static/",
+        "tests/ui/",
+        "tests/test_health.py",
+        "docs/design-import.md"
       ]
     }
   }

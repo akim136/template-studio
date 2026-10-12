@@ -1,8 +1,6 @@
 {
-  "phase": "P2",
-  "kind": "feature",
-  "features": [
-    "F-P2-state-boundary"
-  ],
-  "summary": "Records the non-listed-user access test on production: an account outside the team got Vercel's access page and no app output."
+  "phase": "P3",
+  "kind": "scope_update",
+  "features": [],
+  "summary": "Advance to P3 and add F-P3-core-ui, the feature PR4 (feat/studio-core-ui) declares."
 }
