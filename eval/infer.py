@@ -4,7 +4,9 @@
         --roles Client,CounterSigner --signer-mode SIGNER_MODE --run-cap 2.00 \\
         --ledger PRIVATE/spend-ledger.jsonl --env-file PRIVATE/.env.local --out PRIVATE/run.json
 
-Every route choice is explicit; there are no defaults for model, credential or caps. The full
+Every route choice is explicit; there are no defaults for model, credential or caps. A byok run
+stops at the first call that falls back to Vercel's credentials unless --accept-fallback is given;
+with it, the run continues and the record counts every call that fell back. The full
 record (it contains source text and model answers) goes to --out, outside the repository; it is
 created owner-only and then made read-only (0400). Stdout carries one JSON summary with counts and
 spend only.
@@ -66,6 +68,7 @@ def _summary(record: dict) -> dict:
         "profile": record["profile"],
         "route": record["route"],
         "observed_routes": record["observed_routes"],
+        "fallback_calls": record["fallback_calls"],
         "preflight": record["preflight"]["status"],
         "pages_requested": len(record["pages_requested"]),
         "pages_inspected": sum(1 for e in evidence if e["inspected"]),
@@ -91,12 +94,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--pages", type=_pages, help="e.g. 1-3,7; default every page")
     parser.add_argument("--workers", type=int, default=inference.MAX_WORKERS)
+    parser.add_argument(
+        "--accept-fallback",
+        action="store_true",
+        help="byok only: continue when a call falls back to Vercel's credentials, and record it",
+    )
     args = parser.parse_args(argv)
 
     out, ledger_path = _outside_repo(args.out), _outside_repo(args.ledger)
     if out == ledger_path:
         raise SystemExit("the run record and the ledger must be different files")
-    route = gateway.Route(args.model, args.credential)
+    try:
+        route = gateway.Route(args.model, args.credential, args.accept_fallback)
+    except ValueError as error:
+        raise SystemExit(f"not run: {error}") from None
     config = inference.RunConfig(
         route=route,
         roles=[role.strip() for role in args.roles.split(",")],

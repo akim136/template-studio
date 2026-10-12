@@ -11,6 +11,7 @@ import hashlib
 import struct
 import threading
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
@@ -43,14 +44,19 @@ def _render(page, scale: float, **options) -> tuple[list[bytes], int, int, int]:
         bitmap.close()
 
 
-def inventory_images(source: bytes) -> tuple[int, list[PageImage | str]]:
+def inventory_images(
+    source: bytes, before_page: Callable[[int, int], None] | None = None
+) -> tuple[int, list[PageImage | str]]:
     """Render every page at inventory scale. Returns PDFium's page count and, per page, the image
-    evidence or the reason it could not be rendered."""
+    evidence or the reason it could not be rendered. `before_page(index, page count)` is called
+    before each page is opened; an exception it raises stops the inventory and propagates."""
     with _LOCK:
         pdf = pdfium.PdfDocument(source)
         try:
             results: list[PageImage | str] = []
             for index in range(len(pdf)):
+                if before_page is not None:
+                    before_page(index, len(pdf))
                 try:
                     page = pdf[index]
                     try:

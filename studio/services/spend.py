@@ -27,7 +27,7 @@ TOTAL_CAP_USD = 10.0  # Alex's authorization, October 11, 2026
 
 
 class BudgetExceeded(Exception):
-    pass
+    fell_back = False  # set by gateway.call on a call that overran after falling back
 
 
 @dataclass(frozen=True)

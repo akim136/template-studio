@@ -37,8 +37,9 @@ uv run --locked python -m eval.analyze SOURCE.pdf > /path/outside/the/repo/run.j
 The wrapper calls `studio.services.analysis.analyze`, the same service the app will use. Stdout is
 one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`), per-page
 text, geometry and rendered-image evidence, and flags (per page, or `page: null` for the whole
-document). Sources over 50 MiB are rejected. Parser diagnostics go to stderr. Run records contain
-source text, so keep them outside the repository.
+document). A source over 25 MiB, 400 pages or 4,000,000 characters of text, or whose analysis passes
+3 minutes (checked between pages and at the end), fails with a record that names the limit. Parser diagnostics go to stderr. Run
+records contain source text, so keep them outside the repository.
 
 ## Draft fields through the model route
 
@@ -54,6 +55,10 @@ unless it passes.
 After every call, a model, provider or credential other than the one requested stops the run
 (`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
 and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
+With `--accept-fallback` (byok only), such a call passes instead, but only if it also shows a failed
+attempt on your key: the run continues, and each page call that fell back is marked in its
+evidence. Every byok run counts the calls that fell back, accepted or not, in `fallback_calls`; a
+call that fell back and then failed appears only in that count and in its ledger row.
 A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
 costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx,
 not a timeout) is recorded at $0 and stops the run. The record (source text and model
@@ -76,7 +81,7 @@ page on any other origin. That keeps other machines, other sites and rebound hos
 names out; it is not a login, and any process on this machine is answered. A failed read answers
 503 and says to reload.
 
-- `POST /api/sources` seals a PDF (raw body, at most 50 MiB) under its SHA-256, with its page
+- `POST /api/sources` seals a PDF (raw body, at most 25 MiB) under its SHA-256, with its page
   inventory. This is the local stand-in for the direct R2 upload.
 - `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
   (`countersigner`, and the `required` field types per signer).
