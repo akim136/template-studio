@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -272,7 +273,7 @@ def test_a_create_reported_after_its_replacement_failed_takes_the_slot_back(
         create(operations, approved)
 
 
-def replaced_by_a_create(operations, adapter, clock, approved):
+def replaced_by_a_create(operations, clock, approved):
     """Runs inside the first create: it is declared FAILED, and a second create takes the slot."""
     clock.advance(minutes=5)
     operations.check_status(approved["id"])
@@ -284,7 +285,7 @@ def test_an_orphan_kept_already_is_not_written_again(services, clock, approved):
     kept = {}
 
     def replaced_and_kept():
-        replaced_by_a_create(operations, adapter, clock, approved)
+        replaced_by_a_create(operations, clock, approved)
         kept.update(id=adapter.calls[0], note="kept by an earlier report")
         key = f"templates/{approved['id']}/orphans/{kept['id']}.json"
         services.store.put_new(key, canonical(kept))
@@ -305,11 +306,12 @@ def test_an_orphan_that_cannot_be_kept_is_named_in_the_error(
             raise StorageError("No space left on device")
         return real(key, data)
 
-    adapter.during_create = lambda: replaced_by_a_create(operations, adapter, clock, approved)
+    adapter.during_create = lambda: replaced_by_a_create(operations, clock, approved)
     monkeypatch.setattr(services.store, "put_new", failing)
     with pytest.raises(StorageError, match="resolve by hand") as raised:
         create(operations, approved)
     assert adapter.calls[0] in str(raised.value)
+    assert "check its status" not in str(raised.value)  # a check would see the replacement
 
 
 def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
@@ -331,6 +333,68 @@ def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
         with pytest.raises(StorageError, match="check its status .the operation kept changing"):
             create(operations, approved)
     assert operations.check_status(approved["id"])["state"] == CREATED
+
+
+def test_an_operation_that_takes_its_slot_back_is_not_left_listed_as_an_orphan(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock)
+
+    def meanwhile():
+        first_id = adapter.calls[0]
+        clock.advance(minutes=5)
+
+        def replaced_while_this_check_looks():
+            assert operations.check_status(approved["id"])["state"] == FAILED  # not found yet
+            adapter.create_outcome = "timeout-before"
+            assert create(operations, approved)["state"] == NEEDS_STATUS_CHECK  # open
+            adapter.remote[first_id] = Found(f"remote-{first_id}", digest(adapter.payloads[0]))
+
+        adapter.during_find = replaced_while_this_check_looks
+        assert "resolve by hand" in operations.check_status(approved["id"])["note"]
+        clock.advance(minutes=5)
+        assert operations.check_status(approved["id"])["state"] == FAILED  # nothing created
+        adapter.create_outcome = "ok"
+
+    adapter.during_create = meanwhile
+    first = create(operations, approved)
+    assert first["state"] == CREATED and operations.get(approved["id"]) == first
+    assert "resolve by hand" not in orphan(services, approved, first["id"])["note"]
+
+
+def test_a_replacement_declared_failed_whose_create_lands_later_is_kept_as_an_orphan(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock)
+    results = {}
+
+    def run(name):
+        results[name] = create(operations, approved)
+
+    def start(name):
+        entered, release = threading.Event(), threading.Event()
+
+        def held():
+            entered.set()
+            assert release.wait(5)
+
+        adapter.during_create = held
+        thread = threading.Thread(target=run, args=(name,))
+        thread.start()
+        assert entered.wait(5)
+        clock.advance(minutes=5)
+        assert operations.check_status(approved["id"])["state"] == FAILED  # not found yet
+        return release, thread
+
+    first = start("first")
+    second = start("second")  # replaces the first, and is declared FAILED in turn
+    for release, thread in (first, second):  # the first create lands, then the second
+        release.set()
+        thread.join(5)
+    assert results["first"]["state"] == CREATED
+    assert operations.get(approved["id"]) == results["first"]  # took the slot back
+    assert "resolve by hand" in results["second"]["note"]
+    assert orphan(services, approved, results["second"]["id"]) == results["second"]
 
 
 def test_a_create_reported_after_its_operation_was_replaced_says_so(services, clock, approved):

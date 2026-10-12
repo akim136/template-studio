@@ -19,12 +19,14 @@ A template has at most one operation that is not FAILED, so a create is never re
 A create the adapter reports, or a status check finds at the provider, is written onto the stored
 operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
 lost or left FAILED. If the operation was replaced by another meanwhile, it takes the slot back
-when the replacement FAILED (which holds nothing); otherwise the provider may hold both, and the
-earlier one is kept under templates/{id}/orphans/ with a note to resolve it by hand. A status check
-that would change nothing writes nothing, so repeated checks cannot crowd out a create being
-recorded. If recording the operation fails before the adapter is called, the operation is
-marked FAILED (not attempted) where it landed; if recording the outcome fails after the call, the
-error says to check its status.
+when the replacement is FAILED, and an orphan record an earlier report left for it says so.
+Otherwise the provider may hold both, and the earlier one is kept under templates/{id}/orphans/
+with a note to resolve it by hand; a replacement declared FAILED whose create lands later finds
+the slot taken and is kept the same way. A status check that would change nothing writes nothing,
+so repeated checks cannot crowd out a create being recorded. If recording the operation fails
+before the adapter is called, the operation is marked FAILED (not attempted) where it landed; if
+recording the outcome fails after the call, the error says to check its status, unless an orphan
+could not be kept, which a status check cannot find: that error names the operation instead.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ REPLACED = (
     "this operation's create was reported or found after the operation was replaced by another; "
     "the provider may hold both, so resolve by hand"
 )
+RECLAIMED = "this operation took its slot back after its replacement failed; see operation.json"
 
 
 class Refused(Exception):
@@ -61,6 +64,11 @@ class Refused(Exception):
 
 class OutcomeUnknown(Exception):
     """The adapter cannot tell whether the create happened."""
+
+
+class Unkept(StorageError):
+    """A replaced operation's create could not be kept as an orphan. A status check cannot find
+    it, so the error names it."""
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,8 @@ class Operations:
             if etag is None:
                 return operation  # created already, or replaced: its state stands
             return self._settle(key, operation, etag)
+        except Unkept:
+            raise
         except StorageError as error:
             raise _unrecorded(error) from None
 
@@ -227,24 +237,40 @@ class Operations:
             mine = operation if replaced else current
             recorded = {**mine, **changes, "state": state, "updated_at": self._now()}
             try:
-                return recorded, self.store.replace(key, canonical(recorded), etag)
+                etag = self.store.replace(key, canonical(recorded), etag)
             except PreconditionFailed:
                 stored = self.store.get(key)
                 current, etag = json.loads(stored.data), stored.etag
+                continue
+            if replaced:
+                self._reclaimed(operation)
+            return recorded, etag
         raise StorageError("the operation kept changing while its create was recorded")
 
     def _orphan(self, operation: dict, external_id: str) -> dict:
         changes = {"external_id": external_id, "reported_created": True, "note": REPLACED}
         orphan = {**operation, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": self._now()}
-        key = f"templates/{operation['template_id']}/orphans/{operation['id']}.json"
+        key = self._orphan_key(operation)
         try:
             self.store.put_new(key, canonical(orphan))
         except PreconditionFailed:  # kept already, by the report or by a status check
             return json.loads(self.store.get(key).data)
         except StorageError as error:  # status checks now see the replacement, so name this one
             detail = f"operation {operation['id']} was not kept: {REPLACED} ({error})"
-            raise StorageError(detail) from None
+            raise Unkept(detail) from None
         return orphan
+
+    def _reclaimed(self, operation: dict) -> None:
+        """An orphan record left for an operation that now holds its slot says so."""
+        key = self._orphan_key(operation)
+        stored = self.store.get(key)
+        if stored is None:
+            return
+        kept = {**json.loads(stored.data), "note": RECLAIMED, "updated_at": self._now()}
+        try:
+            self.store.replace(key, canonical(kept), stored.etag)
+        except PreconditionFailed:
+            pass  # only another reclaim rewrites an orphan record
 
     def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:
         try:
@@ -277,6 +303,9 @@ class Operations:
 
     def _key(self, template_id: str) -> str:
         return f"templates/{template_id}/operation.json"
+
+    def _orphan_key(self, operation: dict) -> str:
+        return f"templates/{operation['template_id']}/orphans/{operation['id']}.json"
 
     def _now(self) -> str:
         return self.clock().isoformat()
