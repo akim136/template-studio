@@ -273,6 +273,8 @@ class Drafts:
         stop_reason = (violation or stop or {}).get("reason")
         if preflight is None and state_of("preflight") == "lost":
             stop_reason = stop_reason or "the route check's outcome is unknown; start a new draft"
+        if preflight is not None and preflight["status"] != "PASSED":  # even if its stop was lost
+            stop_reason = stop_reason or f"preflight: {preflight['status']}"
         if applied:
             state = APPLIED
         elif stop_reason:

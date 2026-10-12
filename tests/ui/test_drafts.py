@@ -221,6 +221,25 @@ def test_a_wrong_route_stops_the_draft(book, template):
     assert book.step(template["id"], draft["id"], "t", fake())["state"] == drafts.STOPPED
 
 
+def test_a_failed_route_check_stops_the_draft_even_if_its_stop_was_lost(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    real_write_once = book._write_once
+
+    def loses_the_stop(key, value):
+        if key.endswith(("stop.json", "violation.json")):
+            raise drafts.StorageError("the request died")
+        return real_write_once(key, value)
+
+    book._write_once = loses_the_stop
+    with pytest.raises(drafts.StorageError):  # the check's result was kept, its stop was not
+        book.step(template["id"], draft["id"], "t", FakeGateway(model="openai/gpt-4.1"))
+    book._write_once = real_write_once
+    gateway_ = fake()
+    view = book.step(template["id"], draft["id"], "t", gateway_)
+    assert view["state"] == drafts.STOPPED and view["stop_reason"].startswith("preflight")
+    assert gateway_.chat_bodies() == []
+
+
 def test_a_claimed_call_is_never_sent_twice(book, template, services, clock):
     draft = book.start(template["id"], 1, "anonymous")
     gateway_ = fake()
