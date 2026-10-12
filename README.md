@@ -103,11 +103,12 @@ names out; it is not a login, and any process on this machine is answered. A fai
   and the operation lists the ones it replaced in `replaced`. An unknown outcome keeps its
   operation ID and offers only `POST .../operation/status-check`; a second create of the same
   revision is refused. A create the provider holds wins over a concurrent check that missed it.
-  One reported or found after its operation was replaced takes the slot back if the replacement
-  failed and nothing was created since; otherwise it is kept in the orphan list, because the
-  provider may hold both. An unknown outcome that arrives after a status check declared the
-  operation FAILED reopens it for a status check, or keeps it as an orphan if another create
-  replaced it since. An orphan that cannot be written is named only in the 503 error.
+  So does an unknown outcome: one that arrives after a status check declared the operation FAILED
+  reopens it, and nothing found counts as failed only two minutes after the call returned. One
+  reported, found or left unknown after its operation was replaced takes the slot back if the
+  replacement failed and nothing was created since; otherwise it is kept in the orphan list,
+  because the provider may hold both. An orphan that cannot be written is named only in the 503
+  error.
 - The create, read and status-check answers carry `orphans` (unresolved ones) and, while any
   remain, a `warning`. An unresolved orphan refuses every create with 409, listing them under
   `detail.current.orphans`, until someone checks the provider and posts
