@@ -1,10 +1,10 @@
 # Homebase Template Studio: project guide
 
-**Revision 1.0.14-repo.2 · October 11, 2026 · Owner: Alex Kim**
-**Status:** Alex accepted the P0 foundation (PR1) for merge through PR #1 on October 11, 2026, once all checks were green.
+**Revision 1.0.14-repo.3 · October 11, 2026 · Owner: Alex Kim**
+**Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. This revision is the `scope_update` that advances the active phase to P1 when Alex merges it.
 - Analysis is NOT_IMPLEMENTED.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
-- Nothing is merged, there is no inference, and no phase has advanced.
+- There is no inference and no spend.
 
 This is the canonical guide for this repository. It condenses the private kickoff (guide 1.0.14, PR plan, implementation acceptance, quality and model gate, access runbook) into public-safe requirements.
 
@@ -154,9 +154,9 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
   - Vercel project `template-studio` on a Hobby-plan team, linked to the GitHub repository, with production branch `main`.
   - Vercel Authentication covers all deployments (`ssoProtection.deploymentType: all`, read back through the API). There is no password, trusted-IP or automation bypass, and no share link was created.
   - Signed out, the generated URL, both production aliases and the branch alias redirect `/`, `/healthz` and `/openapi.json` to Vercel's login with no app output.
-  - The first deployment became production from the PR1 branch head, because the project had no production deployment yet. The next push to `main` replaces it.
+  - The first deployment became production from the PR1 branch head, because the project had no production deployment yet. Since the PR1 merge, production deploys from `main`.
   - Named invitations are NOT_APPLIED. Hobby allows one external collaborator, and Alex chose none for now.
-  - A signed-in check by Alex is pending, as is the non-listed-user test.
+  - Signed in, Alex opened production `/healthz` and saw `{"status":"ok","analysis":"NOT_IMPLEMENTED"}` (EXECUTED by Alex, October 11, 2026). The non-listed-user test is pending.
 
 ## 7. Design source (reference only)
 
@@ -201,6 +201,7 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 - Checks cannot prove that code inside an allowed file stays in scope. Human diff review remains required.
 - `pyproject.toml`, `tests/conftest.py` and `tests/test_repo_contract.py` are feature paths. A feature PR could therefore weaken test collection or the CI contract test without a `scope_update` (section 10).
 - A `scope_update` can change the workflow, checker or agent rules without touching the policy. Alex reviews every one.
+- Features are not tied to a phase. A P1 change may still declare `F-P0-foundation`, and features may share paths (`F-P1-analysis` includes `pyproject.toml` and `uv.lock` for the parser dependency).
 
 **Privacy check.** `python3 scripts/check_repo.py private --staged|--all-history [--denylist FILE]`.
 - The denylist of exact protected emails and specific confidential identifiers lives outside Git.
@@ -213,14 +214,14 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 
 | Field | Value |
 |---|---|
-| Phase | P0. PR1 was merged into `main` through PR #1 with a merge commit, after all checks were green. A follow-up P0 fix lets the phase advance (revision 1.0.14-repo.2). |
+| Phase | P1 once this `scope_update` merges. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
 | Analysis | NOT_IMPLEMENTED |
-| Vercel access | Protection applied to all deployments. Named invitations NOT_APPLIED (section 6). |
-| Hosted CI | Passed on draft PR #1 at `033c371`, generic rules only. |
+| Vercel access | Protection applied to all deployments. Alex's signed-in check passed. Named invitations NOT_APPLIED (section 6). |
+| Hosted CI | Passed on PR #1, PR #2 and each push to `main`, generic rules only. |
 | Private inputs | NOT RUN, because they were not supplied. |
 | Inference | None. $0. |
-| Next | An Alex-reviewed `scope_update` PR to P1, gated by the base checker on `main`. |
+| Next | PR2 `spike/studio-analysis`, a P1 feature PR declaring `F-P1-analysis`. Extraction and page inventory need no inference. Classification and self-check wait for an authorized model route and spend cap. |
 
 ## 10. Open decisions
 
@@ -239,3 +240,4 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 |---|---|
 | 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
 | 1.0.14-repo.2 | The contract test no longer pins P0. Rehearsing the P1 `scope_update` after the PR1 merge showed CI would fail, and only a feature change could fix it. |
+| 1.0.14-repo.3 | `scope_update` to P1, adding `F-P1-analysis`. Records Alex's signed-in check. |

@@ -1,5 +1,5 @@
 {
-  "active_phase": "P0",
+  "active_phase": "P1",
   "guide": "docs/PROJECT_GUIDE.md",
   "declaration": "docs/phase_change.json",
   "scope_files": [
@@ -27,6 +27,20 @@
         "tests/conftest.py",
         "tests/test_health.py",
         "tests/test_repo_contract.py"
+      ]
+    },
+    "F-P1-analysis": {
+      "summary": "Generic extraction and a full page inventory over real source bytes, through one analysis service shared by the app and the evaluation wrapper. Classification and self-check wait for authorized inference.",
+      "paths": [
+        ".gitignore",
+        "README.md",
+        "pyproject.toml",
+        "uv.lock",
+        "app.py",
+        "studio/",
+        "eval/",
+        "tests/analysis/",
+        "tests/test_health.py"
       ]
     }
   }
