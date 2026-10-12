@@ -30,6 +30,9 @@ makes at most one model call.
 Hosted uploads go straight from the browser to R2: POST /api/uploads returns a presigned PUT for
 one hash and one length (a Vercel function accepts at most 4.5 MB of request body), and POST
 /api/uploads/{sha256}/seal reads the bytes back, re-hashes them and seals them.
+
+The editor reads each page of a sealed source as a PNG (GET /api/sources/{sha256}/pages/{n}.png).
+A sealed source never changes, so the browser may keep the image.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict
 from starlette.datastructures import Headers
 from starlette.requests import cookie_parser
@@ -76,6 +79,7 @@ HOSTED_ENV = (
 )
 BRANCH_URL_ENV = "VERCEL_BRANCH_URL"  # set by Vercel: the branch's host, without https://
 MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
+PAGE_CACHE = "private, max-age=31536000, immutable"  # a sealed source never changes
 MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
 NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
 SIGN_IN_NOT_CONFIGURED = "sign-in is not configured here"
@@ -443,6 +447,21 @@ async def seal_upload(sha256: str, request: Request) -> dict:
     if hashlib.sha256(stored.data).hexdigest() != sha256:
         raise HTTPException(422, {"errors": ["the uploaded bytes do not match the hash"]})
     return await _seal(services.store, stored.data)
+
+
+@router.get("/sources/{sha256}/pages/{page}.png")
+async def page_image(sha256: str, page: int, request: Request) -> Response:
+    store = _services(request).store
+    try:
+        data = await run_in_threadpool(sources.page_png, store, sha256, page)
+    except NotFound:
+        raise HTTPException(404, "no such sealed source or page") from None
+    except StorageError as error:
+        raise HTTPException(503, f"storage failed; reload and try again: {error}") from None
+    except ValueError as error:
+        raise HTTPException(422, f"this page could not be rendered: {error}") from None
+    headers = {"cache-control": PAGE_CACHE, "x-content-type-options": "nosniff"}
+    return Response(data, media_type="image/png", headers=headers)
 
 
 @router.post("/templates", status_code=201)

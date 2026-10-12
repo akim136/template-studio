@@ -26,6 +26,7 @@ def test_healthz_reports_truthful_status(monkeypatch) -> None:
 
 STATE_ROUTES = {
     ("POST", "/api/sources"),
+    ("GET", "/api/sources/{sha256}/pages/{page}.png"),
     ("POST", "/api/templates"),
     ("GET", "/api/templates"),
     ("GET", "/api/templates/{template_id}"),
@@ -56,6 +57,7 @@ PAGE_ROUTES = {
     ("GET", "/new"),
     ("GET", "/templates/{template_id}"),
     ("GET", "/templates/{template_id}/analyzing"),
+    ("GET", "/templates/{template_id}/edit"),
     ("MOUNT", "/static"),
 }
 

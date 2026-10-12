@@ -46,7 +46,7 @@
       { state: "pending", detail: "" },
       { state: "pending", detail: "" },
       { state: "pending", detail: "" },
-      { state: "pending", detail: "Opens the record; the editor follows in the next slice" },
+      { state: "pending", detail: "Opens the editor to correct and review them" },
     ];
     if (busy === "starting") stages[1] = { state: "current", detail: "Reading every page of the source" };
     if (!view) return stages;

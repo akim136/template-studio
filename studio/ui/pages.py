@@ -1,5 +1,5 @@
-"""The studio's pages: the library, setup, field drafting and a template's record, rendered on
-the server.
+"""The studio's pages: the library, setup, field drafting, a template's record and its field
+editor, rendered on the server.
 
 Every page answers like the state API (studio/state/api.py) and shows only what it can read:
 - state not configured: a page saying so (503), with no sample data;
@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.requests import cookie_parser
 
+from studio.services.fields import MERGE_NAMES
 from studio.state import identity, lifecycle, sources
 from studio.state.api import NOT_CONFIGURED, NOT_LOOPBACK, Services, _loopback
 from studio.state.errors import NotFound
@@ -244,6 +245,39 @@ async def analyzing(request: Request, template_id: str, start: str = "") -> Resp
         "autostart": start == "1",
     }
     return _render(request, services, "analyzing.html", context)
+
+
+@pages.get("/templates/{template_id}/edit", response_class=HTMLResponse)
+async def editor(request: Request, template_id: str) -> Response:
+    """The field editor. The page carries the saved revision and the source's page sizes; every
+    save, review, approval and create goes through the API."""
+    services, viewer, refusal = _viewer(request)
+    if refusal is not None:
+        return refusal
+    if not TEMPLATE_ID.fullmatch(template_id):
+        return _message(request, viewer, 404, "No such template", "Check the link.")
+    try:
+        snapshot = await run_in_threadpool(services.templates.get, template_id)
+        source = await run_in_threadpool(sources.load, services.store, snapshot["source_sha256"])
+        operation = await run_in_threadpool(_operation, services, template_id)
+    except NotFound:
+        return _message(request, viewer, 404, "No such template", "Check the link.")
+    except StorageError:
+        detail = "Something went wrong reading this template. Nothing was changed; reload to retry."
+        return _message(request, viewer, 503, "This template could not be loaded", detail)
+    if source is None:
+        detail = "The sealed source of this template is missing, so its pages cannot be shown."
+        return _message(request, viewer, 503, "This template could not be loaded", detail)
+    data = {
+        "template": snapshot,
+        "pages": source["pages"],
+        "operation": operation,
+        "roles": list(ROLES),
+        "merge_names": list(MERGE_NAMES),
+        "modes": MODES,
+    }
+    context = {"viewer": viewer, "template": snapshot, "data": data}
+    return _render(request, services, "editor.html", context)
 
 
 @pages.get("/templates/{template_id}", response_class=HTMLResponse)
