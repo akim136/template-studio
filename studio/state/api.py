@@ -5,18 +5,23 @@ deployment's disk is ephemeral, so on Vercel nothing is configured: saving there
 Saved. The upload route is the local stand-in for the direct R2 upload, which waits on Alex's R2
 decisions (guide §10).
 
-`StateGate` answers before FastAPI reads or validates a body: 503 when state is not configured,
-403 unless the request is addressed to a loopback host and any page that sent it is served from one,
-and 413 when a JSON body is over MAX_JSON_BYTES, by its declared length or by the bytes that
-arrive. The upload route bounds its own body at MAX_SOURCE_BYTES.
+`StateGate` answers before FastAPI reads or validates a body:
+- 503 when state is not configured;
+- 403 unless the request comes from a loopback address, is addressed to a loopback host, and any
+  page that sent it is served from one;
+- 413 when a JSON body is over MAX_JSON_BYTES, by its declared length or by the bytes that arrive.
+The upload route bounds its own body at MAX_SOURCE_BYTES.
 
-The loopback check keeps other machines, other sites' pages and rebound host names away from saved
-state. It is not an identity: anyone who can run a request on this machine is answered, and the
-studio has no login of its own (Alex's access decision, guide §10).
+The loopback check keeps other machines (even when the server listens on every interface), other
+sites' pages and rebound host names away from saved state. There is no proxy support: a forwarded
+request comes from the proxy's address and is judged by it. It is not an identity: anyone who can
+run a request on this machine is answered, and the studio has no login of its own (Alex's access
+decision, guide §10).
 """
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -112,7 +117,7 @@ class StateGate:
         if getattr(scope["app"].state, "services", None) is None:
             await _answer(scope, receive, send, 503, NOT_CONFIGURED)
             return
-        if not _loopback(Headers(scope=scope)):
+        if not _loopback(scope):
             await _answer(scope, receive, send, 403, NOT_LOOPBACK)
             return
         if path == UPLOAD_PATH:
@@ -145,15 +150,18 @@ def _state_route_path(scope: Scope) -> str | None:
     return None
 
 
-def _loopback(headers: Headers) -> bool:
+def _loopback(scope: Scope) -> bool:
+    peer, headers = scope.get("client"), Headers(scope=scope)
     try:
+        if peer is None or not ipaddress.ip_address(peer[0]).is_loopback:
+            return False
         host = urlsplit(f"//{headers.get('host', '')}").hostname
         origin = headers.get("origin")
         if origin is None:
             return host in LOOPBACK
         page = urlsplit(origin)
         return host in LOOPBACK and page.scheme in ("http", "https") and page.hostname in LOOPBACK
-    except ValueError:  # a malformed host or port
+    except ValueError:  # a peer that is not an address, or a malformed host or port
         return False
 
 

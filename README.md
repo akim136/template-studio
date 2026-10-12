@@ -70,8 +70,9 @@ Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503
 is read: a deployment's disk is ephemeral, so saving there would be a false Saved. The directory
 must be outside the repository, a real directory (not a link), owned by you and owner-only (mode
 700). JSON bodies are at most 1 MiB, checked by declared length and by the bytes that arrive (413).
-State routes answer only requests addressed to `127.0.0.1`, `localhost` or `::1`, and refuse (403)
-one sent by a page on any other origin. That keeps other machines, other sites and rebound host
+State routes answer only requests from a loopback address that are addressed to `127.0.0.1`,
+`localhost` or `::1`, even if the server listens on every interface, and refuse (403) one sent by a
+page on any other origin. That keeps other machines, other sites and rebound host
 names out; it is not a login, and any process on this machine is answered. A failed read answers
 503 and says to reload.
 

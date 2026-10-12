@@ -19,7 +19,7 @@ SAVE_ID = "request-0001"
 @pytest.fixture
 def client(services, monkeypatch):
     monkeypatch.setattr(app.state, "services", services)
-    with TestClient(app, base_url="http://127.0.0.1") as client:
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         yield client
 
 
@@ -148,6 +148,13 @@ def test_state_answers_only_loopback_requests_from_loopback_pages(client, templa
     assert upload.status_code == 403
 
 
+@pytest.mark.parametrize("peer", ["192.168.1.20", "testclient", None])
+def test_a_peer_that_is_not_on_this_machine_is_refused_whatever_its_host_header(services, peer):
+    url = f"/api/templates/{'0' * 32}"
+    reached, sent = gate(services, "GET", url, never_read, peer=peer)  # Host: 127.0.0.1
+    assert reached == [] and sent[0]["status"] == 403
+
+
 @pytest.mark.parametrize("host", ["127.0.0.1:8771", "localhost:8771", "[::1]:8771", "LOCALHOST"])
 def test_loopback_hosts_and_pages_are_answered(client, template, host):
     headers = {"host": host, "origin": "http://localhost:8771"}
@@ -206,7 +213,7 @@ def test_state_is_configured_only_on_local_disk_outside_the_repository(tmp_path)
         api.services_from_environment({api.STATE_DIR_ENV: str(tmp_path / "link")}, ROOT)
 
 
-def gate(services, method, path, receive, host="127.0.0.1"):
+def gate(services, method, path, receive, host="127.0.0.1", peer="127.0.0.1"):
     """Calls StateGate directly, so a test sees exactly what it reads and sends."""
     reached, sent = [], []
 
@@ -223,6 +230,7 @@ def gate(services, method, path, receive, host="127.0.0.1"):
         "root_path": "",
         "query_string": b"",
         "headers": [(b"host", host.encode()), (b"content-length", b"9999999")],
+        "client": None if peer is None else (peer, 50000),
         "app": SimpleNamespace(state=SimpleNamespace(services=services)),
     }
     asyncio.run(api.StateGate(app_behind)(scope, receive, send))
