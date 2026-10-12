@@ -14,19 +14,29 @@ An operation is recorded before the adapter is called, and moves through these s
 - NEEDS_STATUS_CHECK: the outcome is unknown (an error, a timeout, a crash mid-call, a create that
   cannot be read back). The operation keeps its ID, and only a status check is offered.
 
-A template has at most one operation that is not FAILED, so a create is never repeated blindly.
+A template has one operation slot. A create is allowed when the slot is empty, FAILED, or CREATED
+for an earlier revision: each approved revision is created once (Alex, October 12, 2026), and the
+operations it replaces are listed in the new one's `replaced`, carried forward through later
+creates. A create is never repeated blindly: an open operation refuses it, and so does a CREATED one
+for the same revision.
 
 A create the adapter reports, or a status check finds at the provider, is written onto the stored
 operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
 lost or left FAILED. If the operation was replaced by another meanwhile, it takes the slot back
 when the replacement is FAILED, and an orphan record an earlier report left for it says so.
-Otherwise the provider may hold both, and the earlier one is kept under templates/{id}/orphans/
-with a note to resolve it by hand; a replacement declared FAILED whose create lands later finds
-the slot taken and is kept the same way. A status check that would change nothing writes nothing,
+Otherwise the provider may hold both, and the earlier one is kept in the orphan list
+(templates/{id}/orphans/index.json) with a note to resolve it by hand; a replacement declared
+FAILED whose create lands later finds the slot taken and is kept the same way. An unresolved orphan
+is shown with the operation and refuses every create until someone checks the provider and resolves
+it with a note (Alex, October 12, 2026). A status check that would change nothing writes nothing,
 so repeated checks cannot crowd out a create being recorded. If recording the operation fails
 before the adapter is called, the operation is marked FAILED (not attempted) where it landed; if
 recording the outcome fails after the call, the error says to check its status, unless an orphan
 could not be kept, which a status check cannot find: that error names the operation instead.
+
+Retries live in the store (the R2 store retries a request without a clear answer). A write that
+still fails leaves the operation as it was recorded before the call, which refuses a new create and
+offers a status check: that record, with the orphan list, is the dead-letter queue.
 """
 
 from __future__ import annotations
@@ -40,10 +50,10 @@ from typing import Protocol
 
 from studio.services.fields import COORDINATE_SPACE
 from studio.state import sources
-from studio.state.errors import Conflict, NotFound
+from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.policy import parse_policy
 from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical, digest
-from studio.state.templates import Templates
+from studio.state.templates import ACTOR, Templates
 
 CREATING, VERIFYING, CREATED = "CREATING", "VERIFYING", "CREATED"
 FAILED, NEEDS_STATUS_CHECK = "FAILED", "NEEDS_STATUS_CHECK"
@@ -56,6 +66,12 @@ REPLACED = (
     "the provider may hold both, so resolve by hand"
 )
 RECLAIMED = "this operation took its slot back after its replacement failed; see operation.json"
+UNRESOLVED, RESOLVED, TOOK_SLOT_BACK = "unresolved", "resolved", "took_slot_back"
+ORPHANED = (
+    "a create landed after its operation was replaced, so the provider may hold an extra template: "
+    "check the provider, then resolve each orphan before creating again"
+)
+MAX_NOTE = 500
 
 
 class Refused(Exception):
@@ -127,6 +143,31 @@ class Operations:
             raise NotFound(template_id)
         return json.loads(stored.data)
 
+    def orphans(self, template_id: str) -> list[dict]:
+        """Creates kept after their operation was replaced, not yet resolved; oldest first."""
+        self.templates.head(template_id)
+        return self._unresolved(template_id)
+
+    def resolve(self, template_id: str, operation_id: str, note: str, by: str = ACTOR) -> dict:
+        """Records that someone checked the provider for an orphan, and what they found."""
+        self.templates.head(template_id)
+        note = note.strip()
+        if not note or len(note) > MAX_NOTE:
+            raise Invalid([f"say what the provider holds, in 1 to {MAX_NOTE} characters"])
+
+        def settle(kept: dict) -> tuple[dict, bool]:
+            orphan = kept.get(operation_id)
+            if orphan is None:
+                raise NotFound(operation_id)
+            if orphan.get("status", UNRESOLVED) != UNRESOLVED:
+                return orphan, False
+            now = self._now()
+            resolution = {"note": note, "by": by, "at": now}
+            kept[operation_id] = {**orphan, "status": RESOLVED, "resolution": resolution}
+            return kept[operation_id], True
+
+        return self._change_orphans(template_id, settle)
+
     def create(self, template_id: str, revision: int, bound: str) -> dict:
         snapshot = self.templates.require_approved(template_id, revision, bound)
         sources.source_bytes(self.store, snapshot["source_sha256"])  # sealed and intact
@@ -136,16 +177,24 @@ class Operations:
             "roles": parse_policy(snapshot["policy"]).roles,
             "fields": [{k: v for k, v in f.items() if k != "id"} for f in snapshot["fields"]],
         }
+        unresolved = self._unresolved(template_id)
+        if unresolved:
+            raise Conflict(ORPHANED, {"orphans": unresolved})
         key = self._key(template_id)
         current = self.store.get(key)
+        now = self._now()
+        replaced: list[dict] = []
         if current is not None:
             existing = json.loads(current.data)
-            if existing["state"] == CREATED:
-                raise Conflict("the template was already created", existing)
-            if existing["state"] != FAILED:
+            if existing["state"] == CREATED and existing["revision"] == revision:
+                raise Conflict("this revision was already created", existing)
+            if existing["state"] not in (CREATED, FAILED):
                 reason = "an operation is open: check its status, do not create again"
                 raise Conflict(reason, existing)
-        now = self._now()
+            replaced = list(existing.get("replaced", []))
+            if existing["state"] == CREATED:
+                fields = ("id", "revision", "binding", "external_id")
+                replaced.append({**{k: existing[k] for k in fields}, "replaced_at": now})
         operation = {
             "id": uuid.uuid4().hex,
             "template_id": template_id,
@@ -158,6 +207,7 @@ class Operations:
             "started_at": now,
             "updated_at": now,
             "note": "",
+            "replaced": replaced,
         }
         try:
             if current is None:
@@ -229,6 +279,8 @@ class Operations:
         current = operation
         for _ in range(RECORD_ATTEMPTS):
             replaced = current["id"] != operation["id"]
+            if replaced and operation["id"] in {r["id"] for r in current.get("replaced", [])}:
+                return current, None  # created, then replaced by a later revision's create
             if replaced and current["state"] != FAILED:
                 return self._orphan(operation, external_id), None
             if current["state"] == CREATED:
@@ -250,27 +302,58 @@ class Operations:
     def _orphan(self, operation: dict, external_id: str) -> dict:
         changes = {"external_id": external_id, "reported_created": True, "note": REPLACED}
         orphan = {**operation, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": self._now()}
-        key = self._orphan_key(operation)
+        orphan["status"] = UNRESOLVED
+
+        def keep(kept: dict) -> tuple[dict, bool]:
+            if operation["id"] in kept:  # kept already, by the report or by a status check
+                return kept[operation["id"]], False
+            kept[operation["id"]] = orphan
+            return orphan, True
+
         try:
-            self.store.put_new(key, canonical(orphan))
-        except PreconditionFailed:  # kept already, by the report or by a status check
-            return json.loads(self.store.get(key).data)
+            return self._change_orphans(operation["template_id"], keep)
         except StorageError as error:  # status checks now see the replacement, so name this one
             detail = f"operation {operation['id']} was not kept: {REPLACED} ({error})"
             raise Unkept(detail) from None
-        return orphan
 
     def _reclaimed(self, operation: dict) -> None:
         """An orphan record left for an operation that now holds its slot says so."""
-        key = self._orphan_key(operation)
-        stored = self.store.get(key)
-        if stored is None:
-            return
-        kept = {**json.loads(stored.data), "note": RECLAIMED, "updated_at": self._now()}
-        try:
-            self.store.replace(key, canonical(kept), stored.etag)
-        except PreconditionFailed:
-            pass  # only another reclaim rewrites an orphan record
+
+        def mark(kept: dict) -> tuple[None, bool]:
+            orphan = kept.get(operation["id"])
+            if orphan is None or orphan.get("status", UNRESOLVED) != UNRESOLVED:
+                return None, False
+            changes = {"note": RECLAIMED, "status": TOOK_SLOT_BACK, "updated_at": self._now()}
+            kept[operation["id"]] = {**orphan, **changes}
+            return None, True
+
+        self._change_orphans(operation["template_id"], mark)
+
+    def _unresolved(self, template_id: str) -> list[dict]:
+        stored = self.store.get(self._orphans_key(template_id))
+        kept = [] if stored is None else json.loads(stored.data)["orphans"]
+        return [o for o in kept if o.get("status", UNRESOLVED) == UNRESOLVED]
+
+    def _change_orphans(self, template_id: str, change: Callable[[dict], tuple]) -> object:
+        """Applies `change` to the orphan list (by operation ID), writing it conditionally."""
+        key = self._orphans_key(template_id)
+        for _ in range(RECORD_ATTEMPTS):
+            stored = self.store.get(key)
+            orphans = [] if stored is None else json.loads(stored.data)["orphans"]
+            kept = {o["id"]: o for o in orphans}
+            result, changed = change(kept)
+            if not changed:
+                return result
+            data = canonical({"orphans": list(kept.values())})
+            try:
+                if stored is None:
+                    self.store.put_new(key, data)
+                else:
+                    self.store.replace(key, data, stored.etag)
+            except PreconditionFailed:
+                continue
+            return result
+        raise StorageError("the orphan list kept changing")
 
     def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:
         try:
@@ -304,8 +387,8 @@ class Operations:
     def _key(self, template_id: str) -> str:
         return f"templates/{template_id}/operation.json"
 
-    def _orphan_key(self, operation: dict) -> str:
-        return f"templates/{operation['template_id']}/orphans/{operation['id']}.json"
+    def _orphans_key(self, template_id: str) -> str:
+        return f"templates/{template_id}/orphans/index.json"
 
     def _now(self) -> str:
         return self.clock().isoformat()

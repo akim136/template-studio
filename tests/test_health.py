@@ -28,6 +28,7 @@ STATE_ROUTES = {
     ("POST", "/api/templates/{template_id}/operation"),
     ("GET", "/api/templates/{template_id}/operation"),
     ("POST", "/api/templates/{template_id}/operation/status-check"),
+    ("POST", "/api/templates/{template_id}/operation/orphans/{operation_id}/resolve"),
 }
 
 

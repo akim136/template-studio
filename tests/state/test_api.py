@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -260,3 +261,46 @@ def test_a_client_that_leaves_mid_body_gets_no_answer_and_reaches_nothing(servic
 
     reached, sent = gate(services, "PUT", f"/api/templates/{'0' * 32}", receive)
     assert reached == [] and sent == []
+
+
+def test_an_orphan_is_shown_on_every_operation_answer_and_blocks_create_until_resolved(
+    services, clock, monkeypatch
+):
+    from studio.state.signing import ORPHANED, Operations
+    from tests.state.test_signing import Scripted, replaced_by_a_create
+
+    adapter = Scripted()
+    operations = Operations(services.store, services.templates, adapter, clock)
+    monkeypatch.setattr(app.state, "services", dataclasses.replace(services, operations=operations))
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
+        sealed = client.post("/api/sources", content=two_page_pdf()).json()
+        body = {"source_sha256": sealed["sha256"], "policy": POLICY}
+        template = client.post("/api/templates", json=body).json()
+        url = f"/api/templates/{template['id']}"
+        current = save(client, template["id"], 1, [field()]).json()["template"]
+        client.post(f"{url}/review", json=bound(current))
+        approved = client.post(f"{url}/approval", json=bound(current)).json()
+        adapter.during_create = lambda: replaced_by_a_create(operations, clock, approved)
+        kept = client.post(f"{url}/operation", json=bound(approved)).json()
+        shown = client.get(f"{url}/operation").json()
+        assert shown["warning"] == ORPHANED and [o["id"] for o in shown["orphans"]] == [kept["id"]]
+        assert client.post(f"{url}/operation/status-check").json()["warning"] == ORPHANED
+        later = save(client, template["id"], 2, [field(x=80.0)]).json()["template"]
+        client.post(f"{url}/review", json=bound(later))
+        client.post(f"{url}/approval", json=bound(later))
+        refused = client.post(f"{url}/operation", json=bound(later))
+        assert refused.status_code == 409 and refused.json()["detail"]["reason"] == ORPHANED
+        resolve = f"{url}/operation/orphans/{kept['id']}/resolve"
+        claimed = {"note": "checked", "by": "someone@example.test"}
+        assert client.post(resolve, json=claimed).status_code == 422
+        assert (
+            client.post(
+                f"{url}/operation/orphans/{'0' * 32}/resolve", json={"note": "x"}
+            ).status_code
+            == 404
+        )
+        resolved = client.post(resolve, json={"note": "the provider holds both"}).json()
+        assert resolved["status"] == "resolved" and resolved["resolution"]["by"] == "anonymous"
+        assert "warning" not in client.get(f"{url}/operation").json()
+        created = client.post(f"{url}/operation", json=bound(later)).json()
+        assert created["state"] == "CREATED" and created["orphans"] == []

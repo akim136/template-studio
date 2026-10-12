@@ -4,5 +4,5 @@
   "features": [
     "F-P2-state-boundary"
   ],
-  "summary": "PR3 slice 1: the local state core. A conditional-write store, sealed sources, saved revisions with review and approval bound to them, policy validation, a simulated signing adapter and uncertain-operation handling. R2 waits on Alex's decisions."
+  "summary": "PR3 slice 1: the local state core. A conditional-write store, sealed sources, saved revisions with review and approval bound to them, policy validation, a simulated signing adapter and uncertain-operation handling. One signing operation per approved revision, and unresolved orphans block creates until resolved (Alex's decisions of October 12, 2026)."
 }
