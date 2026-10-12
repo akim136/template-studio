@@ -46,14 +46,13 @@ TIMEOUT_STATUSES = frozenset({408, 499})
 ERROR_CODE = re.compile(r"[a-z0-9_.-]{1,64}")
 
 # The models offered, in USD per token (input, output), from the gateway's model list on
-# October 12, 2026. gpt-6-astra and gpt-5.5 are not offered (Alex, October 12, 2026).
+# October 12, 2026. gpt-6-astra and gpt-5.5 are not offered, nor are o4-mini, gpt-5-mini and
+# gpt-5-nano, which OpenAI has deprecated and scheduled for shutdown (Alex, October 12, 2026).
 PRICES = {
     model: (Decimal(price_in) / 1_000_000, Decimal(price_out) / 1_000_000)
     for model, (price_in, price_out) in {  # USD per million tokens
         "openai/gpt-4.1": ("2", "8"),
         "openai/gpt-5": ("1.25", "10"),
-        "openai/gpt-5-mini": ("0.25", "2"),
-        "openai/gpt-5-nano": ("0.05", "0.4"),
         "openai/gpt-5.2": ("1.75", "14"),
         "openai/gpt-5.4": ("2.5", "15"),
         "openai/gpt-5.4-mini": ("0.75", "4.5"),
@@ -63,9 +62,6 @@ PRICES = {
         "openai/gpt-5.6-luna": ("0.2", "1.2"),
         "openai/gpt-6.1-sol": ("2", "10"),
         "openai/gpt-6-luna": ("0.1", "0.5"),
-        # A backup for the P1 run only (Alex, October 12, 2026). OpenAI has deprecated it and
-        # scheduled it for shutdown.
-        "openai/o4-mini": ("1.1", "4.4"),
     }.items()
 }
 # Reasoning models take a reasoning effort instead of a temperature; the reasoning itself is
@@ -75,16 +71,14 @@ REASONING_EFFORT = "medium"
 # Image input tokens at high detail, from OpenAI's vision guide as read on October 12, 2026
 # (https://developers.openai.com/api/docs/guides/images-vision). Tile models cost a base plus a
 # count per 512 px tile; patch models a multiplier per 32 px patch. A patch budget only ever
-# shrinks an image, so counting the patches of the image as sent is an upper bound. The guide
-# marks gpt-5-mini, gpt-5-nano and o4-mini as deprecated and scheduled for shutdown. It has no rule
-# for the UNPUBLISHED models, so they are reserved at whichever is larger: the guide's largest
-# multiplier, or gpt-4.1's tiles.
+# shrinks an image, so counting the patches of the image as sent is an upper bound. The guide has
+# no rule for the UNPUBLISHED models, so they are reserved at whichever is larger: the largest
+# multiplier the guide publishes (LARGEST_MULTIPLIER, gpt-4.1-nano's, a model not offered here, so
+# not in PATCH_MULTIPLIERS), or gpt-4.1's tiles.
 TILES = {"openai/gpt-4.1": (85, 170), "openai/gpt-5": (70, 140)}  # (base, per tile)
 PATCH_MULTIPLIERS = {
     model: Decimal(multiplier)
     for model, multiplier in {
-        "openai/gpt-5-mini": "1.2",
-        "openai/gpt-5-nano": "1.5",
         "openai/gpt-5.2": "1.2",
         "openai/gpt-5.4": "1.2",
         "openai/gpt-5.4-mini": "1.2",
@@ -92,11 +86,10 @@ PATCH_MULTIPLIERS = {
         "openai/gpt-5.6-sol": "1.2",
         "openai/gpt-5.6-terra": "1.2",
         "openai/gpt-5.6-luna": "1.2",
-        "openai/o4-mini": "1.72",
     }.items()
 }
 UNPUBLISHED = frozenset({"openai/gpt-6.1-sol", "openai/gpt-6-luna"})
-LARGEST_MULTIPLIER = Decimal("2.46")
+LARGEST_MULTIPLIER = Decimal("2.46")  # gpt-4.1-nano in the guide: its largest, not derived here
 RESERVE_FACTOR = Decimal("1.5")  # headroom over the token estimate
 MICRO = Decimal("0.000001")
 
