@@ -38,7 +38,7 @@ Precedence, highest first:
 | Field | Value |
 |---|---|
 | Repository | Fresh local Git repository created for this isolated session. The kickoff packet and design archive sit outside the Git root, unchanged. No remote. |
-| Isolation | Independent of earlier Template Studio checkouts and the parallel Paul Lab session. Nothing was copied from them or changed in them. |
+| Isolation | Independent of earlier Template Studio checkouts and another parallel session. Nothing was copied from them or changed in them. |
 | Branches | `main` holds the bootstrap commit, and `chore/studio-foundation` holds PR1. |
 | Local preview | `127.0.0.1:8773`. The preferred ports 8771 and 8772 were held by other sessions. |
 | Budget | Elapsed and remaining assessment time is UNKNOWN until Alex records it. Inference spend is $0, and none is authorized. |
@@ -176,11 +176,11 @@ Per-component decisions are in `docs/design-import.md`.
 **Phase check.** `python3 scripts/check_repo.py phase --base main` reads the policy from the **base** revision, so a feature PR cannot widen its own allowlist. It requires:
 - a fresh declaration;
 - a guide update;
-- a matching phase;
+- a matching phase: a feature declares the base's active phase, and a `scope_update` declares the phase its proposed policy sets;
 - declared feature IDs;
 - changed paths inside those features.
 
-A `kind: scope_update` change may touch only scope files, the declaration and this guide. It cannot bundle operational changes. Exit code 3 means BOOTSTRAP_REQUIRED.
+A `kind: scope_update` change may touch only scope files, the declaration and this guide. It cannot bundle operational changes, and it must leave a valid policy. It is the only way a phase advances, which is why the app does not carry the phase. Exit code 3 means BOOTSTRAP_REQUIRED.
 
 **Merge gate.** Run the checker from the base revision, not from the branch:
 ```sh
@@ -193,6 +193,8 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 - CI runs code from the PR, so it is a backstop, not a tamper-proof gate.
 - A JSON field cannot authenticate a reviewer.
 - Checks cannot prove that code inside an allowed file stays in scope. Human diff review remains required.
+- `pyproject.toml`, `tests/conftest.py` and `tests/test_repo_contract.py` are feature paths. A feature PR could therefore weaken test collection or the CI contract test without a `scope_update` (section 10).
+- A `scope_update` can change the workflow, checker or agent rules without touching the policy. Alex reviews every one.
 
 **Privacy check.** `python3 scripts/check_repo.py private --staged|--all-history [--denylist FILE]`.
 - The denylist of exact protected emails and specific confidential identifiers lives outside Git.
@@ -206,7 +208,7 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 | Field | Value |
 |---|---|
 | Phase | P0 (PR1). Local PR-ready diff. Not accepted. |
-| Reviews | Read-only reviewer subagent and `/codex-review`. Results are recorded in the PR1 gate report. Alex is the approver. |
+| Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
 | Analysis | NOT_IMPLEMENTED |
 | Vercel access | NOT_APPLIED |
 | Hosted CI | NOT RUN, because there is no remote. |
@@ -223,6 +225,9 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 - The remote owner, visibility and timing.
 - The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
 - Whether to send the design (4) conflicts back to Design, or only reject them at import.
+- Whether `pyproject.toml`, `tests/conftest.py` and `tests/test_repo_contract.py` become scope files, or CI runs the scope tests with a fixed configuration (section 8).
+- Whether a `scope_update` that changes the workflow, checker or agent rules needs its own kind.
+- Whether the owner's full name stays in this guide once the repository's visibility is decided.
 
 | Revision | Change |
 |---|---|
