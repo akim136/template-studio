@@ -72,8 +72,9 @@ REASONING_EFFORT = "medium"
 # (https://developers.openai.com/api/docs/guides/images-vision). Tile models cost a base plus a
 # count per 512 px tile; patch models a multiplier per 32 px patch. A patch budget only ever
 # shrinks an image, so counting the patches of the image as sent is an upper bound. The guide has
-# no rule for the UNPUBLISHED models, so they are reserved at whichever is larger: the guide's
-# largest multiplier, or gpt-4.1's tiles.
+# no rule for the UNPUBLISHED models, so they are reserved at whichever is larger: the largest
+# multiplier the guide publishes (LARGEST_MULTIPLIER, gpt-4.1-nano's, a model not offered here, so
+# not in PATCH_MULTIPLIERS), or gpt-4.1's tiles.
 TILES = {"openai/gpt-4.1": (85, 170), "openai/gpt-5": (70, 140)}  # (base, per tile)
 PATCH_MULTIPLIERS = {
     model: Decimal(multiplier)
@@ -88,7 +89,7 @@ PATCH_MULTIPLIERS = {
     }.items()
 }
 UNPUBLISHED = frozenset({"openai/gpt-6.1-sol", "openai/gpt-6-luna"})
-LARGEST_MULTIPLIER = Decimal("2.46")
+LARGEST_MULTIPLIER = Decimal("2.46")  # gpt-4.1-nano in the guide: its largest, not derived here
 RESERVE_FACTOR = Decimal("1.5")  # headroom over the token estimate
 MICRO = Decimal("0.000001")
 
