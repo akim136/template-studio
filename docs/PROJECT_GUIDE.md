@@ -199,7 +199,7 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 - Hosted CI runs without the denylist, so it checks only the generic rules.
 - Before any reviewer that sends source outside the workspace, run the denylist check on the review payload and on history.
 
-**CI.** One ordinary workflow with read-only permissions, no secrets and no `pull_request_target`.
+**CI.** One ordinary workflow, `.github/workflows/ci.yml`. It has read-only permissions, no secrets and no `pull_request_target`, and its actions are pinned to commit SHAs. It runs the generic private scan over all history, then a locked sync, lint, a format check and the tests. It does not run the phase check; the merge gate above is manual.
 
 ## 9. Session record
 

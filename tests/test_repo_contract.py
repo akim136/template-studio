@@ -1,6 +1,7 @@
 """The app, phase policy and docs must tell the same P0 story."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -49,3 +50,18 @@ def test_policy_covers_every_tracked_file() -> None:
         if path and not any(path == p or (p.endswith("/") and path.startswith(p)) for p in allowed)
     ]
     assert uncovered == []
+
+
+def test_ci_is_one_read_only_workflow() -> None:
+    workflows = sorted((ROOT / ".github" / "workflows").iterdir())
+    assert [w.name for w in workflows] == ["ci.yml"]
+    text = workflows[0].read_text(encoding="utf-8")
+
+    assert "\npermissions:\n  contents: read\n" in text
+    assert "write" not in text
+    assert "pull_request_target" not in text
+    assert "secrets." not in text
+    assert "persist-credentials: false" in text
+    assert "--denylist" not in text
+    uses = re.findall(r"uses:\s*(\S+)", text)
+    assert uses and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", u) for u in uses)
