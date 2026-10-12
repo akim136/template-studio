@@ -1,6 +1,8 @@
 {
   "phase": "P2",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Advance to P2 and add F-P2-state-boundary, the feature PR3 (feat/studio-state-boundary) declares."
+  "kind": "feature",
+  "features": [
+    "F-P2-state-boundary"
+  ],
+  "summary": "PR3 slice 1: the local state core. A conditional-write store, sealed sources, saved revisions with review and approval bound to them, policy validation, a simulated signing adapter and uncertain-operation handling. R2 waits on Alex's decisions."
 }

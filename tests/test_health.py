@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app import app
+from studio.state.api import router as state_router
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,8 +18,24 @@ def test_healthz_reports_truthful_status() -> None:
     assert response.json() == {"status": "ok", "analysis": "NOT_IMPLEMENTED"}
 
 
+STATE_ROUTES = {
+    ("POST", "/api/sources"),
+    ("POST", "/api/templates"),
+    ("GET", "/api/templates/{template_id}"),
+    ("PUT", "/api/templates/{template_id}"),
+    ("POST", "/api/templates/{template_id}/review"),
+    ("POST", "/api/templates/{template_id}/approval"),
+    ("POST", "/api/templates/{template_id}/operation"),
+    ("GET", "/api/templates/{template_id}/operation"),
+    ("POST", "/api/templates/{template_id}/operation/status-check"),
+}
+
+
 def test_no_other_routes_are_exposed() -> None:
-    assert {route.path for route in app.routes} == {"/healthz"}
+    assert len(app.routes) == 2  # /healthz and the included state router
+    assert {route.path for route in app.routes if hasattr(route, "path")} == {"/healthz"}
+    exposed = {(method, route.path) for route in state_router.routes for method in route.methods}
+    assert exposed == STATE_ROUTES
     client = TestClient(app)
     for path in ("/", "/docs", "/redoc", "/openapi.json", "/api/analyze"):
         assert client.get(path).status_code == 404, path

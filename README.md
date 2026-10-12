@@ -4,11 +4,12 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P1 analysis spike.** The app serves only `GET /healthz`, which reports
-`"analysis": "NOT_IMPLEMENTED"` because no app route analyzes anything yet. The shared analysis
-service reads the text layer and geometry of every page, renders every page, and flags pages the
-user must look at. Field drafting and self-check are `NOT_RUN` until the model route is wired in.
-There is no authentication, storage or signing adapter yet. See
+**Status: P2 state boundary (local only).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
+because no app route analyzes anything yet. The shared analysis service reads the text layer and
+geometry of every page, renders every page, and flags pages the user must look at. Field drafting
+and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
+run against local disk only, with a simulated signing adapter. There is no R2 storage, no app
+identity and no real signing provider. See
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and
 [`docs/design-import.md`](docs/design-import.md) for the design-import map.
 
@@ -58,6 +59,30 @@ costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway
 not a timeout) is recorded at $0 and stops the run. The record (source text and model
 answers) goes to `--out`, which must be outside the repository: it is created owner-only before any
 call and made read-only at the end. Stdout gets a summary with counts and spend only.
+
+## Saved state (local only)
+
+```sh
+STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0.0.1 --port 8773
+```
+
+Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503: a deployment's
+disk is ephemeral, so saving there would be a false Saved. The directory must be outside the
+repository.
+
+- `POST /api/sources` seals a PDF (raw body, at most 50 MiB) under its SHA-256, with its page
+  inventory. This is the local stand-in for the direct R2 upload.
+- `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
+  (`countersigner`, and the `required` field types per signer).
+- `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. A stale base
+  answers 409 with the current template, invalid fields answer 422, and a storage failure answers
+  503: nothing is reported as saved unless it was.
+- `POST .../review` and `POST .../approval` take the `revision` and `binding` (the hash of the
+  source, policy and fields). Any other revision or binding is refused as stale (409). Every new
+  revision starts unreviewed and unapproved.
+- `POST .../operation` creates the template through the simulated adapter, only for the approved
+  current revision. An unknown outcome keeps its operation ID and offers only
+  `POST .../operation/status-check`; a second create is refused.
 
 ## Checks
 
