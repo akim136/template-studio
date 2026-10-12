@@ -1,0 +1,33 @@
+# Private and incoming inputs never enter history. They live outside this
+# repository. Ignoring a path is not isolation, and a rule added later does
+# not remove a file that is already in history.
+*.pdf
+*.zip
+*.tar
+*.gz
+*.tgz
+*.7z
+*.rar
+*.woff
+*.woff2
+*.ttf
+*.otf
+*.pem
+*.key
+*.p12
+/private/
+/evaluator/
+/_incoming/
+Template_Baseline_*
+ACCESS_ROSTER*
+
+# Local environment and tool state
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.codex-review/
+.DS_Store
