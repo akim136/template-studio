@@ -56,6 +56,8 @@ def test_a_sealed_value_reads_back_until_it_expires():
         lambda t: FORGED_BODY + t[t.index(".") :],  # another payload under the old signature
         lambda t: t.replace(".", ""),
         lambda t: "",
+        lambda t: "A.A",  # base64 of an impossible length
+        lambda t: "\u00e9." + t.split(".")[1],  # not base64 at all
     ],
 )
 def test_a_changed_or_malformed_value_is_refused(mutate):

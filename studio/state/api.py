@@ -77,7 +77,6 @@ NOT_LOOPBACK = "saved state answers only loopback requests from loopback pages"
 NOT_SIGNED_IN = "sign in first at /auth/login"
 CROSS_ORIGIN = "a change must come from the studio's own pages"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def utc_now() -> datetime:
@@ -374,16 +373,17 @@ def _r2(services: Services) -> R2ObjectStore:
     return services.store
 
 
-def _sha256(value: str) -> str:
-    if not SHA256.fullmatch(value):
-        raise HTTPException(422, {"errors": ["a source is named by its lowercase hex SHA-256"]})
-    return value
+def _upload_key(sha256: str) -> str:
+    try:
+        return sources.upload_key(sha256)
+    except sources.SourceError as error:
+        raise HTTPException(422, {"errors": [str(error)]}) from None
 
 
 @router.post("/uploads", status_code=201)
 def request_upload(body: UploadRequest, request: Request) -> dict:
     store = _r2(_services(request))
-    key = sources.upload_key(_sha256(body.sha256))
+    key = _upload_key(body.sha256)
     if body.size > MAX_SOURCE_BYTES:
         raise HTTPException(413, f"a source is at most {MAX_SOURCE_BYTES} bytes")
     if body.size < 1:
@@ -396,7 +396,7 @@ def request_upload(body: UploadRequest, request: Request) -> dict:
 async def seal_upload(sha256: str, request: Request) -> dict:
     services = _services(request)
     store = _r2(services)
-    key = sources.upload_key(_sha256(sha256))
+    key = _upload_key(sha256)
     stored = await run_in_threadpool(_call, store.get, key, writes=False)
     if stored is None:
         raise HTTPException(404, "nothing was uploaded under that hash; upload it first")

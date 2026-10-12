@@ -183,6 +183,15 @@ def test_the_session_is_checked_before_any_body_is_read(anonymous):
     assert answer.status_code == 401
 
 
+def test_a_malformed_cookie_is_not_a_session_or_a_sign_in(anonymous, monkeypatch):
+    anonymous.cookies.set(identity.SESSION_COOKIE, "A.A")
+    assert anonymous.get(f"/api/templates/{'0' * 32}").status_code == 401
+    assert anonymous.get("/auth/me").status_code == 401
+    anonymous.cookies.set(identity.LOGIN_COOKIE, "A.A", path="/auth")
+    monkeypatch.setattr(identity, "urllib_transport", FakeVercel())
+    assert anonymous.get("/auth/callback?code=c&state=s").status_code == 400
+
+
 def test_a_session_ends_after_eight_hours(client, clock):
     url = f"/api/templates/{'0' * 32}"
     assert client.get(url).status_code == 404

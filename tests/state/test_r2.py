@@ -76,7 +76,6 @@ class FakeR2:
         self.objects: dict[str, bytes] = {}
         self.script = list(script)
         self.requests = []
-        self.landed_before_failure = False
 
     def __call__(self, method, url, headers, body, timeout):
         self.requests.append((method, url, dict(headers)))
