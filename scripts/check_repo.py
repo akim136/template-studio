@@ -43,8 +43,12 @@ BLOCKED_EXTENSIONS = {
 }
 PRIVATE_DIRS = {"private", "evaluator", "overlays", "baseline", "_incoming"}
 PRIVATE_NAME = re.compile(
-    r"^(access[_ -]?roster|template[_ -]?baseline[_ -]|build[_ -]?fields[_ -])|^\.env($|\.)", re.I
+    r"^(access[_ -]?roster|template[_ -]?baseline|build[_ -]?fields)|^\.env($|\.)", re.I
 )
+# A PDF header may follow up to 1 KiB of leading bytes; a ZIP is found by its end record.
+PDF_HEADER = re.compile(rb"(?:^|[\r\n\0])%PDF-\d")
+ZIP_END = b"PK\x05\x06"
+ZIP_TAIL = 22 + 65535
 POLICY_PATH = "docs/phase_scope.json"
 BOOTSTRAP_REQUIRED = 3
 
@@ -162,9 +166,9 @@ def path_reasons(path: str) -> list[str]:
 
 def content_reasons(data: bytes) -> list[str]:
     reasons = []
-    if data.startswith(b"%PDF-"):
+    if PDF_HEADER.search(data[: 1024 + 8]):
         reasons.append("PDF content")
-    if data.startswith((b"PK\x03\x04", b"PK\x05\x06")):
+    if data.startswith(b"PK\x03\x04") or ZIP_END in data[-ZIP_TAIL:]:
         reasons.append("ZIP content")
     return reasons
 
