@@ -1,7 +1,7 @@
 # Homebase Template Studio: project guide
 
 **Revision 1.0.14-repo.4 · October 11, 2026 · Owner: Alex Kim**
-**Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. This revision is the `scope_update` that advances the active phase to P1 when Alex merges it.
+**Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. PR #3 is the `scope_update` that advances the active phase to P1. This revision is PR2's draft analysis spike, a P1 feature stacked on it.
 - Analysis is NOT_IMPLEMENTED in the app. PR2 (draft) adds the shared analysis service: text, geometry and a full page inventory. Field drafting and self-check are NOT_RUN.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
 - There is no inference and no spend.
@@ -127,6 +127,7 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
   - evaluator reports.
 
   Separate folders, `.gitignore` or `chmod` do not establish isolation. PR2 needs a test showing that evaluator material cannot be retrieved.
+  - PR2 so far: tests show the service opens no files and the wrapper opens only the source, not decoy evaluator files beside it. Generator request isolation is NOT_RUN, because there is no model client yet.
 - **Development cases.**
   - `dev-a` (97 pages) and `dev-b` (64 pages) are private, *exposed* development cases, not holdouts.
   - Their references are UNREVIEWED.
@@ -215,9 +216,9 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 
 | Field | Value |
 |---|---|
-| Phase | P1 once this `scope_update` merges. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
+| Phase | P1, set by the `scope_update` in PR #3. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
-| Analysis | The app: NOT_IMPLEMENTED. PR2 (draft): `studio.services.analysis` extracts text and geometry and inventories every page, checked against the page tree's `/Count`. Stage A (first draft) and stage B (self-check) are NOT_RUN because inference is not authorized. Page images are NOT_RUN because no rasterizer has been adopted. The comparator checker and its 26 controls are not adopted yet (NOT RUN). |
+| Analysis | The app: NOT_IMPLEMENTED. PR2 (draft): `studio.services.analysis` extracts text and geometry from every leaf of the page tree and checks the count against `/Count`. `COMPLETE` means every page has a record and none failed; a page without text records why. Parser failures become `FAILED` records that keep the source hash. AES-encrypted sources are unsupported until a crypto dependency is decided. Stage A (first draft) and stage B (self-check) are NOT_RUN because inference is not authorized. Page images are NOT_RUN because no rasterizer has been adopted. Generator request isolation is NOT_RUN. The comparator checker and its 26 controls are not adopted yet (NOT RUN). |
 | Vercel access | Protection applied to all deployments. Alex's signed-in check passed. Named invitations NOT_APPLIED (section 6). |
 | Hosted CI | Passed on PR #1, PR #2 and each push to `main`, generic rules only. |
 | Private inputs | NOT RUN, because they were not supplied. |
@@ -228,7 +229,9 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 
 - The assessment time budget, both elapsed and remaining.
 - The private-PDF location for this workspace, and evaluator-only storage for the baseline.
-- The PDF library and its license before parser adoption, plus a native-dependency smoke test on the deployment runtime. PR2 proposes pypdf 6.20.0 (BSD-3-Clause, pure Python, no native dependency) for text and geometry, pending Alex's sign-off. Page images need a rasterizer, which is a separate license and native-dependency decision: pypdfium2 bundles a native PDFium binary, and PyMuPDF is AGPL or commercial.
+- The PDF library and its license before parser adoption, plus a native-dependency smoke test on the deployment runtime. PR2 proposes pypdf 6.20.0 (BSD-3-Clause, pure Python, no native dependency) for text and geometry, pending Alex's sign-off. Page images need a rasterizer, which is a separate license and native-dependency decision: pypdfium2 bundles a native PDFium binary, and PyMuPDF is AGPL or commercial. AES-encrypted sources need `cryptography`, which ships native wheels; until that is decided they fail as unsupported.
+- Source budgets before the service is reachable from an upload route (PR3): maximum bytes, pages and extracted text, and a parse timeout or isolated worker.
+- Whether `COMPLETE` should also require page-image evidence, so a scanned document with no text cannot be COMPLETE.
 - The model route, provider restriction and spend cap. Reference adjudication and tolerances.
 - Named access for seven people: a Pro upgrade or another route, since Hobby allows one external collaborator.
 - The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
@@ -242,4 +245,4 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 | 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
 | 1.0.14-repo.2 | The contract test no longer pins P0. Rehearsing the P1 `scope_update` after the PR1 merge showed CI would fail, and only a feature change could fix it. |
 | 1.0.14-repo.3 | `scope_update` to P1, adding `F-P1-analysis`. Records Alex's signed-in check. |
-| 1.0.14-repo.4 | PR2 draft: shared analysis service with full page inventory, evaluation wrapper, and stdout/JSON and isolation tests. pypdf is proposed. |
+| 1.0.14-repo.4 | PR2 draft: shared analysis service with full page inventory, evaluation wrapper, stdout/JSON tests, and file-isolation tests for the wrapper and service. pypdf is proposed. Review fixes: encrypted page trees, failure records, kept geometry. |

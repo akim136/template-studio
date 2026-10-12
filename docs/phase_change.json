@@ -4,5 +4,5 @@
   "features": [
     "F-P1-analysis"
   ],
-  "summary": "Shared analysis service: text, geometry and a full page inventory over source bytes, an evaluation wrapper with stdout/JSON separation, and isolation tests. No inference."
+  "summary": "Shared analysis service: text, geometry and a full page inventory over source bytes, an evaluation wrapper with stdout/JSON separation, and file-isolation tests. No inference."
 }
