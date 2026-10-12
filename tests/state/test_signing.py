@@ -257,6 +257,46 @@ def test_a_create_reported_after_it_was_declared_failed_is_not_left_failed(
         create(operations, approved)
 
 
+@pytest.mark.parametrize("outcome", ["timeout-before", "timeout-after"])
+def test_an_unknown_outcome_after_it_was_declared_failed_reopens_it(
+    services, clock, approved, outcome
+):
+    operations, adapter = scripted(services, clock, create=outcome)
+
+    def late_check():
+        clock.advance(minutes=5)  # the call outlasts the grace period: nothing found, so FAILED
+        assert operations.check_status(approved["id"])["state"] == FAILED
+
+    adapter.during_create = late_check
+    unknown = create(operations, approved)
+    assert unknown["state"] == NEEDS_STATUS_CHECK and unknown["id"] == adapter.calls[0]
+    assert operations.get(approved["id"]) == unknown
+    with pytest.raises(Conflict, match="check its status"):  # no second, duplicate create
+        create(operations, approved)
+    expected = CREATED if outcome == "timeout-after" else FAILED
+    assert operations.check_status(approved["id"])["state"] == expected
+
+
+def test_an_unknown_outcome_after_its_operation_was_replaced_is_kept_as_an_orphan(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+
+    def replaced():
+        adapter.create_outcome = "ok"
+        replaced_by_a_create(operations, clock, approved)
+        adapter.create_outcome = "timeout-after"
+
+    adapter.during_create = replaced
+    kept = create(operations, approved)
+    assert kept["id"] == adapter.calls[0] and kept["status"] == "unresolved"
+    assert kept["external_id"] is None and not kept["reported_created"]
+    assert "outcome unknown" in kept["note"] and "resolve by hand" in kept["note"]
+    assert operations.orphans(approved["id"]) == [kept]
+    with pytest.raises(Conflict, match="check the provider"):
+        create(operations, approve_next(services, approved))
+
+
 def test_a_create_reported_after_its_replacement_failed_takes_the_slot_back(
     services, clock, approved
 ):
