@@ -448,7 +448,7 @@ def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
 def kept_then_its_replacement_failed(operations, adapter, clock, approved):
     """Runs inside the first create: a status check keeps it as an orphan while a second create is
     open, and the second is then declared FAILED, so the first can take its slot back."""
-    first_id = adapter.calls[0]
+    first_id, outcome = adapter.calls[0], adapter.create_outcome
     clock.advance(minutes=5)
 
     def replaced_while_this_check_looks():
@@ -461,19 +461,22 @@ def kept_then_its_replacement_failed(operations, adapter, clock, approved):
     assert "resolve by hand" in operations.check_status(approved["id"])["note"]
     clock.advance(minutes=5)
     assert operations.check_status(approved["id"])["state"] == FAILED  # nothing created
-    adapter.create_outcome = "ok"
+    adapter.create_outcome = outcome
 
 
+@pytest.mark.parametrize("outcome", ["ok", "timeout-after"])
 def test_an_operation_that_takes_its_slot_back_is_not_left_listed_as_an_orphan(
-    services, clock, approved
+    services, clock, approved, outcome
 ):
-    operations, adapter = scripted(services, clock)
+    operations, adapter = scripted(services, clock, create=outcome)
     adapter.during_create = lambda: kept_then_its_replacement_failed(
         operations, adapter, clock, approved
     )
     first = create(operations, approved)
-    assert first["state"] == CREATED and operations.get(approved["id"]) == first
-    assert "resolve by hand" not in orphan(services, approved, first["id"])["note"]
+    expected = CREATED if outcome == "ok" else NEEDS_STATUS_CHECK
+    assert first["state"] == expected and operations.get(approved["id"]) == first
+    record = orphan(services, approved, first["id"])
+    assert record["status"] == "took_slot_back" and "resolve by hand" not in record["note"]
     assert operations.orphans(approved["id"]) == []  # it holds the slot: nothing to resolve
 
 
@@ -790,10 +793,11 @@ def test_an_orphan_kept_while_a_create_is_recorded_stops_it_before_the_provider(
     assert [r["id"] for r in slot["replaced"]] == [first["id"]]
 
 
+@pytest.mark.parametrize("outcome", ["ok", "timeout-after"])
 def test_a_slot_taken_back_is_not_an_orphan_even_if_its_record_cannot_be_marked(
-    services, clock, approved, monkeypatch
+    services, clock, approved, monkeypatch, outcome
 ):
-    operations, adapter = scripted(services, clock)
+    operations, adapter = scripted(services, clock, create=outcome)
     real = services.store.replace
 
     def marking_fails(key, data, etag):
@@ -807,8 +811,13 @@ def test_a_slot_taken_back_is_not_an_orphan_even_if_its_record_cannot_be_marked(
 
     adapter.during_create = meanwhile
     first = create(operations, approved)
-    assert first["state"] == CREATED and operations.get(approved["id"]) == first
+    expected = CREATED if outcome == "ok" else NEEDS_STATUS_CHECK
+    assert first["state"] == expected and operations.get(approved["id"]) == first
     assert orphan(services, approved, first["id"])["status"] == "unresolved"  # not marked
+    if outcome != "ok":
+        monkeypatch.setattr(services.store, "replace", real)
+        assert operations.check_status(approved["id"])["state"] == CREATED
+        adapter.create_outcome = "ok"
     assert operations.orphans(approved["id"]) == []  # it holds the slot
     later = create(operations, approve_next(services, approved))
     assert later["state"] == CREATED and operations.orphans(approved["id"]) == []
