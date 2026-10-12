@@ -22,21 +22,30 @@ for the same revision.
 
 A create the adapter reports, or a status check finds at the provider, is written onto the stored
 operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
-lost or left FAILED. If the operation was replaced by another meanwhile, it takes the slot back
-when the replacement is FAILED, and an orphan record an earlier report left for it says so.
-Otherwise the provider may hold both, and the earlier one is kept in the orphan list
+lost or left FAILED. So is an unknown outcome: a check that declared the operation FAILED looked
+before the create may have landed, so the operation is reopened for a status check. If the
+operation was replaced by another meanwhile, it takes the slot back when the replacement is FAILED
+and nothing was created since it was replaced (the replacement lists the same `replaced`); an
+orphan record an earlier report left for it then says so and no longer counts. Otherwise the
+provider may hold both, and the late create is kept in the orphan list
 (templates/{id}/orphans/index.json) with a note to resolve it by hand; a replacement declared
-FAILED whose create lands later finds the slot taken and is kept the same way. An unresolved orphan
-is shown with the operation and refuses every create until someone checks the provider and resolves
-it with a note (Alex, October 12, 2026). A status check that would change nothing writes nothing,
-so repeated checks cannot crowd out a create being recorded. If recording the operation fails
-before the adapter is called, the operation is marked FAILED (not attempted) where it landed; if
-recording the outcome fails after the call, the error says to check its status, unless an orphan
-could not be kept, which a status check cannot find: that error names the operation instead.
+FAILED whose create lands later finds the slot taken and is kept the same way, as is an unknown
+outcome after the operation was replaced. An unresolved orphan is shown with the operation and
+refuses every create until someone checks the provider and resolves it with a note (Alex, October
+12, 2026); a create checks again after it is recorded, and is not attempted if an orphan was kept
+meanwhile (one kept after that check, while the call is made, cannot stop it: no stored check is
+atomic with an external call). A status check that would change nothing writes nothing, so repeated
+checks cannot crowd out a create being recorded. If recording the operation fails before the
+adapter is called, the operation is marked FAILED (not attempted) where it landed; if recording the
+outcome fails after the call, the error says to check its status, unless an orphan could not be
+kept, which a status check cannot find: that error names the operation instead.
 
-Retries live in the store (the R2 store retries a request without a clear answer). A write that
-still fails leaves the operation as it was recorded before the call, which refuses a new create and
-offers a status check: that record, with the orphan list, is the dead-letter queue.
+Retries belong to the store: the R2 store (on `feat/hosted-login`) retries a request without a
+clear answer, and the local store does not retry. A write that still fails leaves the operation as
+it was recorded before the call, which refuses a new create and offers a status check: that record,
+with the orphan list, is the dead-letter queue. The one exception is an orphan that cannot be
+written: its replacement holds the slot, so it is named only in the error, and someone must check
+the provider by hand.
 """
 
 from __future__ import annotations
@@ -62,14 +71,14 @@ FAILED, NEEDS_STATUS_CHECK = "FAILED", "NEEDS_STATUS_CHECK"
 GRACE = timedelta(minutes=2)
 RECORD_ATTEMPTS = 10  # concurrent writes a create being recorded can lose to before it gives up
 REPLACED = (
-    "this operation's create was reported or found after the operation was replaced by another; "
-    "the provider may hold both, so resolve by hand"
+    "this operation's create was reported, found or left unknown after the operation was "
+    "replaced by another; the provider may hold both, so resolve by hand"
 )
 RECLAIMED = "this operation took its slot back after its replacement failed; see operation.json"
 UNRESOLVED, RESOLVED, TOOK_SLOT_BACK = "unresolved", "resolved", "took_slot_back"
 ORPHANED = (
-    "a create landed after its operation was replaced, so the provider may hold an extra template: "
-    "check the provider, then resolve each orphan before creating again"
+    "a create landed, or may have landed, after its operation was replaced, so the provider may "
+    "hold an extra template: check the provider, then resolve each orphan before creating again"
 )
 MAX_NOTE = 500
 
@@ -146,7 +155,8 @@ class Operations:
     def orphans(self, template_id: str) -> list[dict]:
         """Creates kept after their operation was replaced, not yet resolved; oldest first."""
         self.templates.head(template_id)
-        return self._unresolved(template_id)
+        stored = self.store.get(self._key(template_id))
+        return self._unresolved(template_id, None if stored is None else json.loads(stored.data))
 
     def resolve(self, template_id: str, operation_id: str, note: str, by: str = ACTOR) -> dict:
         """Records that someone checked the provider for an orphan, and what they found."""
@@ -177,15 +187,16 @@ class Operations:
             "roles": parse_policy(snapshot["policy"]).roles,
             "fields": [{k: v for k, v in f.items() if k != "id"} for f in snapshot["fields"]],
         }
-        unresolved = self._unresolved(template_id)
+        key = self._key(template_id)
+        current = self.store.get(key)  # read before the orphans, so one kept after is caught below
+        holder = None if current is None else json.loads(current.data)
+        unresolved = self._unresolved(template_id, holder)
         if unresolved:
             raise Conflict(ORPHANED, {"orphans": unresolved})
-        key = self._key(template_id)
-        current = self.store.get(key)
         now = self._now()
         replaced: list[dict] = []
-        if current is not None:
-            existing = json.loads(current.data)
+        if holder is not None:
+            existing = holder
             if existing["state"] == CREATED and existing["revision"] == revision:
                 raise Conflict("this revision was already created", existing)
             if existing["state"] not in (CREATED, FAILED):
@@ -221,12 +232,28 @@ class Operations:
             self._not_attempted(key, operation)
             raise
         try:
+            unresolved = self._unresolved(template_id, operation)  # kept while this was recorded
+        except StorageError:
+            self._not_attempted(key, operation)
+            raise
+        if unresolved:
+            note = "not attempted: an orphan was kept while this create was recorded"
+            try:
+                self._move(key, operation, etag, FAILED, note=note)
+            except StorageError:
+                pass  # left CREATING with no call made, a status check finds nothing and fails it
+            raise Conflict(ORPHANED, {"orphans": unresolved})
+        try:
             external_id = self.adapter.create(operation["id"], payload)
         except Refused as error:
             return self._after_call(key, operation, etag, FAILED, note=f"refused: {error}")
         except Exception as error:  # a timeout or any error: the create may have happened
-            note = f"create outcome unknown ({type(error).__name__})"
-            return self._after_call(key, operation, etag, NEEDS_STATUS_CHECK, note=note)
+            try:
+                return self._unknown(key, operation, etag, type(error).__name__)
+            except Unkept:
+                raise
+            except StorageError as error:
+                raise _unrecorded(error) from None
         try:
             operation, etag = self._record(key, operation, etag, external_id, VERIFYING)
             if etag is None:
@@ -273,15 +300,17 @@ class Operations:
     ) -> tuple[dict, str | None]:
         """Writes a create the adapter reported (VERIFYING) or the provider holds (CREATED) onto
         the stored operation, whatever a concurrent status check did to it meanwhile. A CREATED
-        operation stands; one replaced by an operation that FAILED takes the slot back, and one
-        replaced by any other is kept as an orphan. The etag is None when nothing was written
-        here."""
+        operation stands; one replaced by an operation that FAILED takes the slot back if nothing
+        was created since, and one replaced otherwise is kept as an orphan. The etag is None when
+        nothing was written here."""
         current = operation
         for _ in range(RECORD_ATTEMPTS):
             replaced = current["id"] != operation["id"]
-            if replaced and operation["id"] in {r["id"] for r in current.get("replaced", [])}:
+            if replaced and operation["id"] in _ids(current):
                 return current, None  # created, then replaced by a later revision's create
-            if replaced and current["state"] != FAILED:
+            if replaced and (current["state"] != FAILED or _ids(current) != _ids(operation)):
+                # The replacement holds a create, or one was made after this was replaced (the
+                # slot's list moved on), so the provider may hold both.
                 return self._orphan(operation, external_id), None
             if current["state"] == CREATED:
                 return current, None
@@ -295,12 +324,40 @@ class Operations:
                 current, etag = json.loads(stored.data), stored.etag
                 continue
             if replaced:
-                self._reclaimed(operation)
+                try:
+                    self._reclaimed(operation)
+                except StorageError:
+                    pass  # best effort: an orphan whose operation holds the slot is not counted
             return recorded, etag
         raise StorageError("the operation kept changing while its create was recorded")
 
-    def _orphan(self, operation: dict, external_id: str) -> dict:
-        changes = {"external_id": external_id, "reported_created": True, "note": REPLACED}
+    def _unknown(self, key: str, operation: dict, etag: str, error: str) -> dict:
+        """Records that the create's outcome is unknown, whatever a concurrent status check did
+        meanwhile. One that declared it FAILED (the call outlasted the grace period) looked
+        before the create may have landed, so the operation is reopened; if another create
+        replaced it since, the provider may hold both, so it is kept as an orphan."""
+        note = f"create outcome unknown ({error})"
+        current = operation
+        for _ in range(RECORD_ATTEMPTS):
+            if current["id"] != operation["id"]:
+                if operation["id"] in _ids(current):
+                    return current  # found, created, then replaced by a later revision's create
+                return self._orphan(operation, None, note=f"{note}; {REPLACED}")
+            if current["state"] not in (CREATING, FAILED):
+                return current  # found, or already waiting on a status check: its state stands
+            reopened = {**current, "note": note, "state": NEEDS_STATUS_CHECK}
+            reopened["updated_at"] = self._now()
+            try:
+                self.store.replace(key, canonical(reopened), etag)
+                return reopened
+            except PreconditionFailed:
+                stored = self.store.get(key)
+                current, etag = json.loads(stored.data), stored.etag
+        raise StorageError("the operation kept changing while its outcome was recorded")
+
+    def _orphan(self, operation: dict, external_id: str | None, note: str = REPLACED) -> dict:
+        reported = external_id is not None
+        changes = {"external_id": external_id, "reported_created": reported, "note": note}
         orphan = {**operation, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": self._now()}
         orphan["status"] = UNRESOLVED
 
@@ -329,10 +386,15 @@ class Operations:
 
         self._change_orphans(operation["template_id"], mark)
 
-    def _unresolved(self, template_id: str) -> list[dict]:
+    def _unresolved(self, template_id: str, holder: dict | None) -> list[dict]:
+        """Unresolved orphans, except any that took the slot back: the operation in the slot, or
+        one it lists as replaced (marking its record is best effort)."""
         stored = self.store.get(self._orphans_key(template_id))
         kept = [] if stored is None else json.loads(stored.data)["orphans"]
-        return [o for o in kept if o.get("status", UNRESOLVED) == UNRESOLVED]
+        settled = set() if holder is None else {holder["id"], *_ids(holder)}
+        return [
+            o for o in kept if o.get("status", UNRESOLVED) == UNRESOLVED and o["id"] not in settled
+        ]
 
     def _change_orphans(self, template_id: str, change: Callable[[dict], tuple]) -> object:
         """Applies `change` to the orphan list (by operation ID), writing it conditionally."""
@@ -356,7 +418,7 @@ class Operations:
         raise StorageError("the orphan list kept changing")
 
     def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:
-        try:
+        try:  # a refusal: nothing exists, so a concurrent request's state can stand
             return self._move(key, operation, etag, state, note=note)[0]
         except StorageError as error:
             raise _unrecorded(error) from None
@@ -392,6 +454,10 @@ class Operations:
 
     def _now(self) -> str:
         return self.clock().isoformat()
+
+
+def _ids(operation: dict) -> list[str]:
+    return [r["id"] for r in operation.get("replaced", [])]
 
 
 def _unrecorded(error: StorageError) -> StorageError:

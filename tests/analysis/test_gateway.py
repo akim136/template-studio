@@ -272,14 +272,23 @@ def test_a_call_the_gateway_refused_settles_at_zero(tmp_path, status):
     assert error.value.fatal  # a refusal would repeat on every page, so it stops the run
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-6-astra", "openai/gpt-5.5"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-6-astra",
+        "openai/gpt-5.5",
+        "openai/o4-mini",  # deprecated, like the two below; dropped by Alex on October 12, 2026
+        "openai/gpt-5-mini",
+        "openai/gpt-5-nano",
+    ],
+)
 def test_the_models_alex_excluded_are_not_offered(model):
     with pytest.raises(ValueError, match="no price"):
         gateway.Route(model, "system")
 
 
 def test_the_gpt5_models_are_reasoning_models():
-    for model in ("openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5.6-sol"):
+    for model in ("openai/gpt-5", "openai/gpt-5.4-nano", "openai/gpt-5.6-luna"):
         body = gateway.request_body(gateway.Route(model, "byok"), MESSAGES, SCHEMA, 9)
         assert body["reasoning"]["effort"] == "medium" and "temperature" not in body
 
@@ -377,9 +386,9 @@ def test_only_a_byok_route_can_accept_a_fallback():
         gateway.Route("openai/gpt-4.1", "byok", accept_fallback="yes")
 
 
-def test_o4_mini_is_offered_as_a_reasoning_model():
-    route = gateway.Route("openai/o4-mini", "byok")
-    assert gateway.PRICES[route.model] == (Decimal("0.0000011"), Decimal("0.0000044"))
+def test_the_backup_gpt_5_4_mini_is_offered_as_a_reasoning_model():
+    route = gateway.Route("openai/gpt-5.4-mini", "byok")
+    assert gateway.PRICES[route.model] == (Decimal("0.00000075"), Decimal("0.0000045"))
     assert "reasoning" in gateway.request_body(route, MESSAGES, SCHEMA, 9)
 
 
@@ -394,8 +403,7 @@ def test_o4_mini_is_offered_as_a_reasoning_model():
         ("openai/gpt-4.1", (770, 1027), 85 + 170 * 6),  # 768 x 1024.33: rounding would give 4
         ("openai/gpt-4.1", (5000, 1251), 85 + 170 * 8),  # 2048 x 512.41 counts as 513 rows
         ("openai/gpt-5.2", (768, 994), 922),  # 24 x 32 patches x 1.2, rounded up
-        ("openai/gpt-5-nano", (768, 994), 1152),  # x 1.5
-        ("openai/o4-mini", (768, 994), 1321),  # x 1.72
+        ("openai/gpt-5.4-mini", (768, 994), 922),
         ("openai/gpt-6-luna", (768, 994), 1890),  # not in the guide: x 2.46, the largest
         ("openai/gpt-6-luna", (40, 40), 85 + 170),  # not in the guide: or a tile, if more
     ],

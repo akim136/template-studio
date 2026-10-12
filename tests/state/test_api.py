@@ -122,6 +122,24 @@ def test_a_storage_failure_answers_503_and_never_claims_the_outcome(
     assert client.get(f"/api/templates/{template['id']}").json()["revision"] == 1
 
 
+def test_an_orphan_list_that_cannot_be_read_after_a_create_never_says_it_failed(
+    client, template, services, monkeypatch
+):
+    url = f"/api/templates/{template['id']}"
+    current = save(client, template["id"], 1, [field()]).json()["template"]
+    client.post(f"{url}/review", json=bound(current))
+    approved = client.post(f"{url}/approval", json=bound(current)).json()
+
+    def failing(template_id):
+        raise StorageError("cannot read orphans/index.json: Input/output error")
+
+    monkeypatch.setattr(services.operations, "orphans", failing)
+    created = client.post(f"{url}/operation", json=bound(approved))
+    assert created.status_code == 503
+    assert "may or may not have been saved, so reload before retrying" in created.json()["detail"]
+    assert client.get(f"{url}/operation").json()["detail"].startswith("storage failed; reload")
+
+
 def test_a_storage_failure_on_a_read_says_to_reload(client, template, services, monkeypatch):
     def failing(key):
         raise StorageError("cannot read head.json: Input/output error")
