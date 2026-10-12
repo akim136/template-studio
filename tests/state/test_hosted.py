@@ -311,6 +311,36 @@ def test_hosted_state_is_configured_from_every_setting(tmp_path):
     assert api.configure(on_vercel, tmp_path / "r").state == "r2"  # local disk never on Vercel
 
 
+BRANCH_HOST = "studio-git-topic-team.example.test"
+PREVIEW = {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_BRANCH_URL": BRANCH_HOST}
+NO_ORIGIN = {k: v for k, v in HOSTED.items() if k != "STUDIO_PUBLIC_ORIGIN"}
+
+
+def test_a_preview_without_a_public_origin_uses_its_branch_url(tmp_path):
+    configuration = api.configure({**NO_ORIGIN, **PREVIEW}, tmp_path)
+    assert configuration.state == "r2" and configuration.problems == ()
+    assert configuration.services.auth.origin == f"https://{BRANCH_HOST}"
+    assert api.configure({**HOSTED, **PREVIEW}, tmp_path).services.auth.origin == ORIGIN  # set wins
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        {**PREVIEW, "VERCEL_ENV": "production"},
+        {"VERCEL": "1", "VERCEL_ENV": "preview"},
+        {"VERCEL_ENV": "preview", "VERCEL_BRANCH_URL": BRANCH_HOST},  # not on Vercel
+    ],
+)
+def test_only_a_vercel_preview_with_a_branch_url_goes_without_a_public_origin(tmp_path, where):
+    configuration = api.configure({**NO_ORIGIN, **where}, tmp_path)
+    assert configuration.problems == ("STUDIO_PUBLIC_ORIGIN is missing",)
+
+
+def test_a_preview_branch_url_that_is_not_a_host_turns_state_off(tmp_path):
+    configuration = api.configure({**NO_ORIGIN, **PREVIEW, "VERCEL_BRANCH_URL": "a/b"}, tmp_path)
+    assert configuration.problems == ("STUDIO_PUBLIC_ORIGIN is not an origin like https://host",)
+
+
 @pytest.mark.parametrize(
     ("changes", "problem"),
     [

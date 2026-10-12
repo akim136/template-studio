@@ -4,5 +4,5 @@
   "features": [
     "F-P2-state-boundary"
   ],
-  "summary": "PR3 slice 2: hosted state. The R2 store with conditional writes and retries, presigned direct upload and seal, and Sign in with Vercel as app identity (Alex's decision of October 12, 2026), on top of the local state core."
+  "summary": "Hosted settings for every environment: a Vercel preview without STUDIO_PUBLIC_ORIGIN uses its branch URL, so every preview branch can run hosted state; docs record the production and preview settings and the wider CORS rule."
 }

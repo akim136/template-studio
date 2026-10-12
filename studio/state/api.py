@@ -5,7 +5,8 @@ Saved state runs in one of two modes, or not at all (`configure`):
   answered, and nobody signs in: sign-offs are recorded `by: anonymous`.
 - Hosted: R2 storage and Sign in with Vercel. This is the only mode on Vercel, where local disk is
   ephemeral and saving there would be a false Saved. It needs every HOSTED_ENV setting; a missing
-  or malformed one leaves state unconfigured, and /healthz names it (never its value).
+  or malformed one leaves state unconfigured, and /healthz names it (never its value). A Vercel
+  preview may leave STUDIO_PUBLIC_ORIGIN unset and use its branch URL instead.
 
 `StateGate` answers before FastAPI reads or validates a body:
 - 503 when state is not configured;
@@ -67,6 +68,7 @@ HOSTED_ENV = (
     "STUDIO_SESSION_SECRET",
     "STUDIO_PUBLIC_ORIGIN",
 )
+BRANCH_URL_ENV = "VERCEL_BRANCH_URL"  # set by Vercel: the branch's host, without https://
 MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
 MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
 NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
@@ -129,6 +131,8 @@ def configure(environ: Mapping[str, str], repository: Path) -> Configuration:
         return Configuration(local, "local")
     if not on_vercel and not any(environ.get(name) for name in HOSTED_ENV):
         return Configuration(None, "not_configured")
+    if on_vercel:
+        environ = _with_branch_origin(environ)
     problems = _hosted_problems(environ)
     if problems:
         return Configuration(None, "not_configured", problems)
@@ -145,6 +149,15 @@ def configure(environ: Mapping[str, str], repository: Path) -> Configuration:
         environ["STUDIO_PUBLIC_ORIGIN"],
     )
     return Configuration(hosted_services(R2ObjectStore(credentials), auth), "r2")
+
+
+def _with_branch_origin(environ: Mapping[str, str]) -> Mapping[str, str]:
+    """On a Vercel preview without STUDIO_PUBLIC_ORIGIN, the branch URL is the origin: one fixed
+    origin cannot serve every preview branch, and a branch keeps its URL across deployments."""
+    branch = environ.get(BRANCH_URL_ENV)
+    if environ.get("STUDIO_PUBLIC_ORIGIN") or environ.get("VERCEL_ENV") != "preview" or not branch:
+        return environ
+    return {**environ, "STUDIO_PUBLIC_ORIGIN": f"https://{branch}"}
 
 
 def _hosted_problems(environ: Mapping[str, str]) -> tuple[str, ...]:

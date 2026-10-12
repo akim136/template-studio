@@ -4,7 +4,7 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P2 state boundary (local, with hosted state built but not deployed).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
+**Status: P2 state boundary (local, and hosted on production and every preview).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
 because no app route analyzes anything yet. The shared analysis service reads the text layer and
 geometry of every page, renders every page, and flags pages the user must look at. Field drafting
 and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
@@ -127,7 +127,7 @@ log name it without showing its value:
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | An R2 token limited to Object Read & Write on that bucket |
 | `VERCEL_OAUTH_CLIENT_ID`, `VERCEL_OAUTH_CLIENT_SECRET` | The Sign in with Vercel app |
 | `STUDIO_SESSION_SECRET` | At least 32 random characters; signs the session cookie |
-| `STUDIO_PUBLIC_ORIGIN` | The origin sign-in returns to, such as `https://host` (no path) |
+| `STUDIO_PUBLIC_ORIGIN` | The origin sign-in returns to, such as `https://host` (no path). A Vercel preview may leave it unset and use its branch URL (`https://` and `VERCEL_BRANCH_URL`) |
 
 Vercel Authentication decides who reaches a deployment. Sign in with Vercel only tells the app who
 that person is: `GET /auth/login` starts it (OAuth 2.0 with PKCE), `GET /auth/callback` finishes
@@ -135,7 +135,9 @@ it, `GET /auth/me` shows the verified email, and `POST /auth/logout` clears the 
 not the Vercel one. Review and approval record that email. The app keeps no list of people.
 
 Every hosted `/api` route needs a session (401 without one) and, for a change, a request from the
-studio's own origin (403 otherwise). Uploads skip the function body limit:
+studio's own origin (403 otherwise). On a preview, use the branch URL (`...-git-<branch>-...`): a
+change sent from another of its URLs is refused, and sign-in moves to the branch URL. Uploads skip
+the function body limit:
 
 - `POST /api/uploads` with `{"sha256", "size"}` returns a presigned `PUT` URL for the key named
   by that hash and for that length, valid for 10 minutes. The browser sends the PDF straight to R2,
