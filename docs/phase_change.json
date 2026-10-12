@@ -4,5 +4,5 @@
   "features": [
     "F-P2-state-boundary"
   ],
-  "summary": "PR3 slice 1: the local state core. A conditional-write store, sealed sources, saved revisions with review and approval bound to them, policy validation, a simulated signing adapter and uncertain-operation handling. One signing operation per approved revision, and unresolved orphans block creates until resolved (Alex's decisions of October 12, 2026)."
+  "summary": "PR3 slice 2: hosted state. The R2 store with conditional writes and retries, presigned direct upload and seal, and Sign in with Vercel as app identity (Alex's decision of October 12, 2026), on top of the local state core."
 }

@@ -1,29 +1,40 @@
-"""HTTP routes for sources, templates, review and approval, and the signing operation.
+"""HTTP routes for sources, templates, review and approval, the signing operation, and sign-in.
 
-The routes answer 503 unless saved state is configured, and only local disk can be configured. A
-deployment's disk is ephemeral, so on Vercel nothing is configured: saving there would be a false
-Saved. The upload route is the local stand-in for the direct R2 upload, which waits on Alex's R2
-decisions (guide §10).
+Saved state runs in one of two modes, or not at all (`configure`):
+- Local: STUDIO_STATE_DIR names a directory outside the repository. Only loopback requests are
+  answered, and nobody signs in: sign-offs are recorded `by: anonymous`.
+- Hosted: R2 storage and Sign in with Vercel. This is the only mode on Vercel, where local disk is
+  ephemeral and saving there would be a false Saved. It needs every HOSTED_ENV setting; a missing
+  or malformed one leaves state unconfigured, and /healthz names it (never its value).
 
 `StateGate` answers before FastAPI reads or validates a body:
 - 503 when state is not configured;
-- 403 unless the request comes from a loopback address, is addressed to a loopback host, and any
-  page that sent it is served from one;
+- local: 403 unless the request comes from a loopback address, is addressed to a loopback host,
+  and any page that sent it is served from one;
+- hosted: 401 without a valid session, and 403 for a request that changes anything unless its
+  Origin is the studio's own (STUDIO_PUBLIC_ORIGIN);
 - 413 when a JSON body is over MAX_JSON_BYTES, by its declared length or by the bytes that arrive.
 The upload route bounds its own body at MAX_SOURCE_BYTES.
 
 The loopback check keeps other machines (even when the server listens on every interface), other
-sites' pages and rebound host names away from saved state. There is no proxy support. uvicorn
+sites' pages and rebound host names away from local state. There is no proxy support. uvicorn
 trusts X-Forwarded-For from a proxy on this machine by default, so a forwarded request is judged
 by the address the proxy reports. It is not an identity: anyone who can run a request on this
-machine is answered, and the studio has no login of its own (Alex's access decision, guide §10).
+machine is answered.
+
+Hosted uploads go straight from the browser to R2: POST /api/uploads returns a presigned PUT for
+one hash and one length (a Vercel function accepts at most 4.5 MB of request body), and POST
+/api/uploads/{sha256}/seal reads the bytes back, re-hashes them and seals them.
 """
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import re
+import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,25 +42,45 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.datastructures import Headers
+from starlette.requests import cookie_parser
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from studio.state import sources
+from studio.state import identity, sources
 from studio.state.errors import Conflict, Invalid, NotFound
+from studio.state.r2 import UPLOAD_EXPIRY_S, Credentials, R2ObjectStore
 from studio.state.signing import ORPHANED, Operations, SimulatedSigningAdapter
 from studio.state.store import LocalObjectStore, ObjectStore, StorageError
-from studio.state.templates import Templates
+from studio.state.templates import ACTOR, Templates
 
 STATE_DIR_ENV = "STUDIO_STATE_DIR"
+HOSTED_ENV = (
+    "R2_ACCOUNT_ID",
+    "R2_BUCKET",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "VERCEL_OAUTH_CLIENT_ID",
+    "VERCEL_OAUTH_CLIENT_SECRET",
+    "STUDIO_SESSION_SECRET",
+    "STUDIO_PUBLIC_ORIGIN",
+)
 MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
 MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
 NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
+SIGN_IN_NOT_CONFIGURED = "sign-in is not configured here"
 UPLOAD_PATH = "/api/sources"
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 NOT_LOOPBACK = "saved state answers only loopback requests from loopback pages"
+NOT_SIGNED_IN = "sign in first at /auth/login"
+CROSS_ORIGIN = "a change must come from the studio's own pages"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -57,28 +88,108 @@ class Services:
     store: ObjectStore
     templates: Templates
     operations: Operations
+    auth: identity.AuthConfig | None = None  # None: local loopback mode, nobody signs in
+    clock: Callable[[], datetime] = utc_now
 
 
-def utc_now() -> datetime:
-    return datetime.now(UTC)
+@dataclass(frozen=True)
+class Configuration:
+    services: Services | None
+    state: str  # "local", "r2" or "not_configured"
+    problems: tuple[str, ...] = field(default=())
 
 
 def local_services(root: Path, clock: Callable[[], datetime] = utc_now) -> Services:
-    store = LocalObjectStore(root)
+    return _services_on(LocalObjectStore(root), None, clock)
+
+
+def hosted_services(
+    store: ObjectStore, auth: identity.AuthConfig, clock: Callable[[], datetime] = utc_now
+) -> Services:
+    return _services_on(store, auth, clock)
+
+
+def _services_on(
+    store: ObjectStore, auth: identity.AuthConfig | None, clock: Callable[[], datetime]
+) -> Services:
     templates = Templates(store, clock)
     operations = Operations(store, templates, SimulatedSigningAdapter(store), clock)
-    return Services(store, templates, operations)
+    return Services(store, templates, operations, auth, clock)
 
 
-def services_from_environment(environ: Mapping[str, str], repository: Path) -> Services | None:
-    if environ.get("VERCEL"):
-        return None
+def configure(environ: Mapping[str, str], repository: Path) -> Configuration:
+    """Local state off Vercel when STUDIO_STATE_DIR is set; hosted state on Vercel, or off it when
+    any hosted setting is present and STUDIO_STATE_DIR is not."""
+    on_vercel = bool(environ.get("VERCEL"))
     root = environ.get(STATE_DIR_ENV)
-    if not root:
+    if not on_vercel and root:
+        if Path(root).resolve().is_relative_to(repository.resolve()):
+            raise RuntimeError(f"{STATE_DIR_ENV} must be outside the repository")
+        local = local_services(Path(root).absolute())  # unresolved, so a link is seen and refused
+        return Configuration(local, "local")
+    if not on_vercel and not any(environ.get(name) for name in HOSTED_ENV):
+        return Configuration(None, "not_configured")
+    problems = _hosted_problems(environ)
+    if problems:
+        return Configuration(None, "not_configured", problems)
+    credentials = Credentials(
+        environ["R2_ACCOUNT_ID"],
+        environ["R2_BUCKET"],
+        environ["R2_ACCESS_KEY_ID"],
+        environ["R2_SECRET_ACCESS_KEY"],
+    )
+    auth = identity.AuthConfig(
+        environ["VERCEL_OAUTH_CLIENT_ID"],
+        environ["VERCEL_OAUTH_CLIENT_SECRET"],
+        environ["STUDIO_SESSION_SECRET"],
+        environ["STUDIO_PUBLIC_ORIGIN"],
+    )
+    return Configuration(hosted_services(R2ObjectStore(credentials), auth), "r2")
+
+
+def _hosted_problems(environ: Mapping[str, str]) -> tuple[str, ...]:
+    problems = []
+    for name in HOSTED_ENV:
+        value = environ.get(name, "")
+        if not value:
+            problems.append(f"{name} is missing")
+        elif value != value.strip() or value[:1] in "\"'" or value[-1:] in "\"'":
+            problems.append(f"{name} has stray spaces or quotes")
+    if problems:
+        return tuple(problems)
+    if not re.fullmatch(r"[0-9a-f]{32}", environ["R2_ACCOUNT_ID"]):
+        problems.append("R2_ACCOUNT_ID is not a 32-character account ID")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", environ["R2_BUCKET"]):
+        problems.append("R2_BUCKET is not a bucket name")
+    if len(environ["STUDIO_SESSION_SECRET"]) < identity.MIN_SECRET_CHARS:
+        problems.append(f"STUDIO_SESSION_SECRET is shorter than {identity.MIN_SECRET_CHARS}")
+    if _origin(environ["STUDIO_PUBLIC_ORIGIN"]) != environ["STUDIO_PUBLIC_ORIGIN"]:
+        problems.append("STUDIO_PUBLIC_ORIGIN is not an origin like https://host")
+    return tuple(problems)
+
+
+def _origin(value: str) -> str | None:
+    """The origin as a browser sends it (lowercase host, no default port), or None. Anything else
+    would never equal a request's Origin or Host, and every change would be refused."""
+    parts = urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError:
         return None
-    if Path(root).resolve().is_relative_to(repository.resolve()):
-        raise RuntimeError(f"{STATE_DIR_ENV} must be outside the repository")
-    return local_services(Path(root).absolute())  # unresolved, so a link is seen and refused
+    host = parts.hostname
+    if not host or parts.username is not None or parts.path or parts.query or parts.fragment:
+        return None
+    if not (parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK)):
+        return None
+    host = f"[{host}]" if ":" in host else host
+    default = 443 if parts.scheme == "https" else 80
+    return f"{parts.scheme}://{host}" + ("" if port in (None, default) else f":{port}")
+
+
+def report(configuration: Configuration) -> None:
+    """Says loudly, at startup, why hosted state is off."""
+    for problem in configuration.problems:
+        print(f"template-studio: saved state is off: {problem}", file=sys.stderr)
 
 
 class _Body(BaseModel):
@@ -102,11 +213,17 @@ class Bound(_Body):
     binding: str
 
 
+class UploadRequest(_Body):
+    sha256: str
+    size: int
+
+
 class Resolution(_Body):
     note: str  # what the person found at the provider
 
 
 router = APIRouter(prefix="/api")
+auth_router = APIRouter(prefix="/auth")
 
 
 class StateGate:
@@ -118,12 +235,26 @@ class StateGate:
         if path is None:
             await self.app(scope, receive, send)
             return
-        if getattr(scope["app"].state, "services", None) is None:
+        services = getattr(scope["app"].state, "services", None)
+        if services is None:
             await _answer(scope, receive, send, 503, NOT_CONFIGURED)
             return
-        if not _loopback(scope):
-            await _answer(scope, receive, send, 403, NOT_LOOPBACK)
-            return
+        if services.auth is None:
+            if not _loopback(scope):
+                await _answer(scope, receive, send, 403, NOT_LOOPBACK)
+                return
+        else:
+            headers = Headers(scope=scope)
+            cookies = cookie_parser(headers.get("cookie", ""))
+            cookie = cookies.get(identity.SESSION_COOKIE)
+            actor = identity.session_actor(services.auth, cookie, services.clock())
+            if actor is None:
+                await _answer(scope, receive, send, 401, NOT_SIGNED_IN)
+                return
+            if scope["method"] not in SAFE_METHODS and not _same_origin(headers, services.auth):
+                await _answer(scope, receive, send, 403, CROSS_ORIGIN)
+                return
+            scope.setdefault("state", {})["actor"] = actor
         if path == UPLOAD_PATH:
             await self.app(scope, receive, send)
             return
@@ -169,6 +300,10 @@ def _loopback(scope: Scope) -> bool:
         return False
 
 
+def _same_origin(headers: Headers, auth: identity.AuthConfig) -> bool:
+    return headers.get("origin") == auth.origin
+
+
 async def _answer(scope: Scope, receive: Receive, send: Send, status: int, detail: str) -> None:
     await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
 
@@ -193,6 +328,11 @@ def _services(request: Request) -> Services:
     return services
 
 
+def _by(request: Request) -> str:
+    actor = getattr(request.state, "actor", None)
+    return ACTOR if actor is None else actor.email  # an email only from a verified sign-in
+
+
 def _call(action: Callable[..., Any], *args: Any, writes: bool = True) -> Any:
     try:
         return action(*args)
@@ -209,6 +349,13 @@ def _call(action: Callable[..., Any], *args: Any, writes: bool = True) -> Any:
         raise HTTPException(503, f"{detail} before retrying: {error}") from None
 
 
+async def _seal(store: ObjectStore, data: bytes) -> dict:
+    try:
+        return await run_in_threadpool(_call, sources.seal, store, data)
+    except sources.SourceError as error:
+        raise HTTPException(422, {"errors": [str(error)]}) from None
+
+
 @router.post("/sources", status_code=201)
 async def upload_source(request: Request) -> dict:
     services = _services(request)
@@ -221,10 +368,47 @@ async def upload_source(request: Request) -> dict:
         body += chunk
         if len(body) > MAX_SOURCE_BYTES:
             raise HTTPException(413, too_large)
+    return await _seal(services.store, bytes(body))
+
+
+def _r2(services: Services) -> R2ObjectStore:
+    if not isinstance(services.store, R2ObjectStore):
+        raise HTTPException(409, "direct upload needs R2 storage; POST the PDF to /api/sources")
+    return services.store
+
+
+def _upload_key(sha256: str) -> str:
     try:
-        return await run_in_threadpool(_call, sources.seal, services.store, bytes(body))
+        return sources.upload_key(sha256)
     except sources.SourceError as error:
         raise HTTPException(422, {"errors": [str(error)]}) from None
+
+
+@router.post("/uploads", status_code=201)
+def request_upload(body: UploadRequest, request: Request) -> dict:
+    store = _r2(_services(request))
+    key = _upload_key(body.sha256)
+    if body.size > MAX_SOURCE_BYTES:
+        raise HTTPException(413, f"a source is at most {MAX_SOURCE_BYTES} bytes")
+    if body.size < 1:
+        raise HTTPException(422, {"errors": ["size must be the file's length in bytes"]})
+    url = store.presign_put(key, body.size)
+    return {"method": "PUT", "url": url, "expires_in": UPLOAD_EXPIRY_S, "size": body.size}
+
+
+@router.post("/uploads/{sha256}/seal", status_code=201)
+async def seal_upload(sha256: str, request: Request) -> dict:
+    services = _services(request)
+    store = _r2(services)
+    key = _upload_key(sha256)
+    stored = await run_in_threadpool(_call, store.get, key, writes=False)
+    if stored is None:
+        raise HTTPException(404, "nothing was uploaded under that hash; upload it first")
+    if len(stored.data) > MAX_SOURCE_BYTES:
+        raise HTTPException(413, f"a source is at most {MAX_SOURCE_BYTES} bytes")
+    if hashlib.sha256(stored.data).hexdigest() != sha256:
+        raise HTTPException(422, {"errors": ["the uploaded bytes do not match the hash"]})
+    return await _seal(services.store, stored.data)
 
 
 @router.post("/templates", status_code=201)
@@ -249,13 +433,14 @@ def save_template(template_id: str, body: Save, request: Request) -> dict:
 @router.post("/templates/{template_id}/review")
 def confirm_review(template_id: str, body: Bound, request: Request) -> dict:
     templates = _services(request).templates
-    return _call(templates.confirm_review, template_id, body.revision, body.binding)
+    args = (template_id, body.revision, body.binding, _by(request))
+    return _call(templates.confirm_review, *args)
 
 
 @router.post("/templates/{template_id}/approval")
 def approve(template_id: str, body: Bound, request: Request) -> dict:
     templates = _services(request).templates
-    return _call(templates.approve, template_id, body.revision, body.binding)
+    return _call(templates.approve, template_id, body.revision, body.binding, _by(request))
 
 
 def _with_orphans(operations: Operations, template_id: str, operation: dict, writes: bool) -> dict:
@@ -292,4 +477,83 @@ def check_operation(template_id: str, request: Request) -> dict:
 @router.post("/templates/{template_id}/operation/orphans/{operation_id}/resolve")
 def resolve_orphan(template_id: str, operation_id: str, body: Resolution, request: Request) -> dict:
     operations = _services(request).operations
-    return _call(operations.resolve, template_id, operation_id, body.note)
+    return _call(operations.resolve, template_id, operation_id, body.note, _by(request))
+
+
+def _auth(request: Request) -> tuple[identity.AuthConfig, Services]:
+    services = getattr(request.app.state, "services", None)
+    if services is None or services.auth is None:
+        raise HTTPException(503, SIGN_IN_NOT_CONFIGURED)
+    return services.auth, services
+
+
+def _secure(auth: identity.AuthConfig) -> bool:
+    return auth.origin.startswith("https://")
+
+
+@auth_router.get("/login")
+def login(request: Request) -> RedirectResponse:
+    auth, services = _auth(request)
+    if request.headers.get("host") != urlsplit(auth.origin).netloc:
+        return RedirectResponse(f"{auth.origin}/auth/login", 303)  # the registered callback
+    url, cookie = identity.start(auth, services.clock())
+    response = RedirectResponse(url, 303)
+    max_age = int(identity.LOGIN_TTL.total_seconds())
+    response.set_cookie(
+        identity.LOGIN_COOKIE,
+        cookie,
+        max_age=max_age,
+        path="/auth",
+        httponly=True,
+        secure=_secure(auth),
+        samesite="lax",
+    )
+    return response
+
+
+@auth_router.get("/callback")
+async def callback(
+    request: Request, code: str | None = None, state: str | None = None, error: str | None = None
+) -> RedirectResponse:
+    auth, services = _auth(request)
+    if error:
+        raise HTTPException(400, "sign-in was cancelled or refused at Vercel; sign in again")
+    login_cookie = request.cookies.get(identity.LOGIN_COOKIE)
+    args = (auth, code, state, login_cookie, services.clock(), identity.urllib_transport)
+    try:
+        _, session = await run_in_threadpool(identity.finish, *args)
+    except identity.SignInFailed as failure:
+        raise HTTPException(400, str(failure)) from None
+    response = RedirectResponse("/auth/me", 303)
+    response.set_cookie(
+        identity.SESSION_COOKIE,
+        session,
+        max_age=int(identity.SESSION_TTL.total_seconds()),
+        path="/",
+        httponly=True,
+        secure=_secure(auth),
+        samesite="lax",
+    )
+    response.delete_cookie(identity.LOGIN_COOKIE, path="/auth")
+    return response
+
+
+@auth_router.get("/me")
+def me(request: Request) -> dict:
+    auth, services = _auth(request)
+    cookie = request.cookies.get(identity.SESSION_COOKIE)
+    actor = identity.session_actor(auth, cookie, services.clock())
+    if actor is None:
+        raise HTTPException(401, NOT_SIGNED_IN)
+    return {"email": actor.email, "name": actor.name, "identity": "Sign in with Vercel"}
+
+
+@auth_router.post("/logout")
+def logout(request: Request) -> JSONResponse:
+    auth, _ = _auth(request)
+    if not _same_origin(request.headers, auth):
+        raise HTTPException(403, CROSS_ORIGIN)
+    note = "signed out of the studio; this does not sign you out of Vercel"
+    response = JSONResponse({"signed_out": True, "note": note})
+    response.delete_cookie(identity.SESSION_COOKIE, path="/")
+    return response

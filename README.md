@@ -4,12 +4,12 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P2 state boundary (local only).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
+**Status: P2 state boundary (local, with hosted state built but not deployed).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
 because no app route analyzes anything yet. The shared analysis service reads the text layer and
 geometry of every page, renders every page, and flags pages the user must look at. Field drafting
 and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
-run against local disk only, with a simulated signing adapter. There is no R2 storage, no app
-identity and no real signing provider. See
+run against local disk, or on a deployment against Cloudflare R2 with Sign in with Vercel, always
+with a simulated signing adapter. There is no real signing provider. See
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and
 [`docs/design-import.md`](docs/design-import.md) for the design-import map.
 
@@ -65,7 +65,7 @@ not a timeout) is recorded at $0 and stops the run. The record (source text and 
 answers) goes to `--out`, which must be outside the repository: it is created owner-only before any
 call and made read-only at the end. Stdout gets a summary with counts and spend only.
 
-## Saved state (local only)
+## Saved state (local)
 
 ```sh
 STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0.0.1 --port 8773
@@ -114,6 +114,38 @@ names out; it is not a login, and any process on this machine is answered. A fai
   `detail.current.orphans`, until someone checks the provider and posts
   `POST .../operation/orphans/{operation_id}/resolve` with a `note` saying what they found; the
   answer is the resolved record.
+
+## Hosted state (R2 and Sign in with Vercel)
+
+Hosted mode is the only mode on Vercel. It needs every one of these settings; a missing or
+malformed one (stray spaces or quotes included) keeps state off, and `/healthz` and the startup
+log name it without showing its value:
+
+| Setting | What it is |
+|---|---|
+| `R2_ACCOUNT_ID`, `R2_BUCKET` | The Cloudflare account (32 hex characters) and the bucket |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | An R2 token limited to Object Read & Write on that bucket |
+| `VERCEL_OAUTH_CLIENT_ID`, `VERCEL_OAUTH_CLIENT_SECRET` | The Sign in with Vercel app |
+| `STUDIO_SESSION_SECRET` | At least 32 random characters; signs the session cookie |
+| `STUDIO_PUBLIC_ORIGIN` | The origin sign-in returns to, such as `https://host` (no path) |
+
+Vercel Authentication decides who reaches a deployment. Sign in with Vercel only tells the app who
+that person is: `GET /auth/login` starts it (OAuth 2.0 with PKCE), `GET /auth/callback` finishes
+it, `GET /auth/me` shows the verified email, and `POST /auth/logout` clears the studio's session,
+not the Vercel one. Review and approval record that email. The app keeps no list of people.
+
+Every hosted `/api` route needs a session (401 without one) and, for a change, a request from the
+studio's own origin (403 otherwise). Uploads skip the function body limit:
+
+- `POST /api/uploads` with `{"sha256", "size"}` returns a presigned `PUT` URL for the key named
+  by that hash and for that length, valid for 10 minutes. The browser sends the PDF straight to R2,
+  which does not check the bytes; seal does.
+- `POST /api/uploads/{sha256}/seal` reads the upload back, re-hashes it and seals it as a source
+  (404 if nothing was uploaded, 422 if the bytes do not match the hash or are not a usable PDF).
+
+Run hosted mode locally against the bucket by setting all eight (with
+`STUDIO_PUBLIC_ORIGIN=http://localhost:8771`) and no `STUDIO_STATE_DIR`. The Sign in with Vercel
+app must list `http://localhost:8771/auth/callback`; the bucket's CORS allows that origin.
 
 ## Checks
 
