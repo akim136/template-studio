@@ -5,6 +5,8 @@ Vercel's system credentials, and a request may list fallback models. Neither is 
 unnoticed. Each call names one model and the credential it must use; the response's routing
 metadata must show exactly one model attempt, on that model, that succeeded on that credential.
 Anything else is a RouteViolation, raised after the call's cost has been settled in the ledger.
+The one exception is a BYOK route that accepts a fallback (Alex, October 12, 2026): a success on
+the system credential then passes, and is recorded as a fallback on the call and in the ledger.
 A response whose routing cannot be read at all is a fatal GatewayError, and its reservation
 stays at the worst case.
 
@@ -20,12 +22,13 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import os
 import re
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
@@ -60,15 +63,38 @@ PRICES = {
         "openai/gpt-5.6-luna": ("0.2", "1.2"),
         "openai/gpt-6.1-sol": ("2", "10"),
         "openai/gpt-6-luna": ("0.1", "0.5"),
+        # A backup for the P1 run only (Alex, October 12, 2026). OpenAI has deprecated it and
+        # scheduled it for shutdown.
+        "openai/o4-mini": ("1.1", "4.4"),
     }.items()
 }
 # Reasoning models take a reasoning effort instead of a temperature; the reasoning itself is
 # billed as output and is not returned. Every model offered but gpt-4.1 is one.
 REASONING_MODELS = frozenset(PRICES) - {"openai/gpt-4.1"}
 REASONING_EFFORT = "medium"
-# Per page image at high detail: patch-counted models take up to 2,500 patches at up to 1.5 tokens
-# each (gpt-5-nano); tile-counted models (gpt-4.1, gpt-5) stay under 1,500.
-IMAGE_TOKENS_WORST = 3750
+# Image input tokens at high detail, from OpenAI's vision guide on October 12, 2026. Tile models
+# cost a base plus a count per 512 px tile; patch models a multiplier per 32 px patch. A patch
+# budget only ever shrinks an image, so counting the patches of the image as sent is an upper
+# bound. The guide has no rule for the UNPUBLISHED models, so they are reserved at whichever is
+# larger: the guide's largest multiplier, or gpt-4.1's tiles.
+TILES = {"openai/gpt-4.1": (85, 170), "openai/gpt-5": (70, 140)}  # (base, per tile)
+PATCH_MULTIPLIERS = {
+    model: Decimal(multiplier)
+    for model, multiplier in {
+        "openai/gpt-5-mini": "1.2",
+        "openai/gpt-5-nano": "1.5",
+        "openai/gpt-5.2": "1.2",
+        "openai/gpt-5.4": "1.2",
+        "openai/gpt-5.4-mini": "1.2",
+        "openai/gpt-5.4-nano": "1.2",
+        "openai/gpt-5.6-sol": "1.2",
+        "openai/gpt-5.6-terra": "1.2",
+        "openai/gpt-5.6-luna": "1.2",
+        "openai/o4-mini": "1.72",
+    }.items()
+}
+UNPUBLISHED = frozenset({"openai/gpt-6.1-sol", "openai/gpt-6-luna"})
+LARGEST_MULTIPLIER = Decimal("2.46")
 RESERVE_FACTOR = Decimal("1.5")  # headroom over the token estimate
 MICRO = Decimal("0.000001")
 
@@ -99,12 +125,17 @@ class GatewayError(Exception):
 class Route:
     model: str
     credential: str  # "byok" (Alex's key) or "system" (Vercel credits)
+    accept_fallback: bool = False  # a byok call that succeeds on system credentials passes
 
     def __post_init__(self):
         if self.model not in PRICES:
             raise ValueError(f"no price for {self.model}; add it before using it")
         if self.credential not in ("byok", "system"):
             raise ValueError(f"credential must be byok or system, got {self.credential}")
+        if not isinstance(self.accept_fallback, bool):
+            raise ValueError("accept_fallback must be true or false")
+        if self.accept_fallback and self.credential != "byok":
+            raise ValueError("only a byok route can accept a fallback to system credentials")
 
 
 @dataclass(frozen=True)
@@ -119,6 +150,7 @@ class CallResult:
     market_cost_usd: Decimal
     seconds: float
     failed_attempts: list[str] = field(default_factory=list)  # provider/credential/status
+    fell_back: bool = False  # answered on system credentials on a byok route that accepts it
 
 
 def read_token(env_file: Path | None = None) -> str:
@@ -180,10 +212,42 @@ def _count(value) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def worst_case_usd(route: Route, text_chars: int, images: int, max_output_tokens: int) -> Decimal:
-    """An upper estimate of one call's cost, rounded up to a millionth of a dollar."""
+def _tile_tokens(base: int, per_tile: int, width: int, height: int) -> int:
+    scale = min(1.0, 2048 / max(width, height))  # fit a 2048 px square, never enlarging
+    width, height = int(width * scale), int(height * scale)
+    if min(width, height) > 768:  # then the short side down to 768 px
+        if width <= height:
+            width, height = 768, int(height * 768 / width)
+        else:
+            width, height = int(width * 768 / height), 768
+    return base + per_tile * math.ceil(width / 512) * math.ceil(height / 512)
+
+
+def _patch_tokens(multiplier: Decimal, width: int, height: int) -> int:
+    patches = math.ceil(width / 32) * math.ceil(height / 32)
+    return int((patches * multiplier).to_integral_value(rounding=ROUND_CEILING))
+
+
+def image_tokens(model: str, width: int, height: int) -> int:
+    """At most the input tokens a width x height image costs at high detail on `model`."""
+    if model in TILES:
+        return _tile_tokens(*TILES[model], width, height)
+    if model in PATCH_MULTIPLIERS:
+        return _patch_tokens(PATCH_MULTIPLIERS[model], width, height)
+    if model in UNPUBLISHED:
+        tiles = _tile_tokens(*TILES["openai/gpt-4.1"], width, height)
+        return max(tiles, _patch_tokens(LARGEST_MULTIPLIER, width, height))
+    raise ValueError(f"no image rule for {model}; add one before using it")
+
+
+def worst_case_usd(
+    route: Route, text_chars: int, images: Sequence[tuple[int, int]], max_output_tokens: int
+) -> Decimal:
+    """An upper estimate of one call's cost, rounded up to a millionth of a dollar. `images` are
+    the (width, height) in pixels of each image sent."""
     price_in, price_out = PRICES[route.model]
-    input_tokens = Decimal(text_chars) / 3 + images * IMAGE_TOKENS_WORST
+    image_input = sum(image_tokens(route.model, width, height) for width, height in images)
+    input_tokens = Decimal(text_chars) / 3 + image_input
     usd = RESERVE_FACTOR * (input_tokens * price_in + max_output_tokens * price_out)
     return usd.quantize(MICRO, rounding=ROUND_CEILING)
 
@@ -207,8 +271,9 @@ def request_body(route: Route, messages: list[dict], schema: dict, max_output_to
     return body
 
 
-def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], list[str]]:
-    """(model, provider, credential, failed attempts, problems) from the routing metadata.
+def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], bool, list[str]]:
+    """(model, provider, credential, failed attempts, fell back, problems) from the routing
+    metadata.
 
     Every attempt, failed or not, must be on the pinned provider. A failed attempt on the other
     credential is recorded, not refused: with the system credential the gateway tries Alex's key
@@ -236,7 +301,7 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], l
     winners = [(slug, p) for slug, p in attempts if p.get("success") is True]
     if len(winners) != 1:
         problems.append(f"{len(winners)} successful provider attempts, expected exactly 1")
-        return "", "", "", failed, problems
+        return "", "", "", failed, False, problems
     model, provider = winners[0]
     observed_model = model
     name, credential = provider.get("provider", ""), provider.get("credentialType", "")
@@ -244,11 +309,12 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], l
         problems.append(f"model {observed_model} answered, expected {route.model}")
     if name != PROVIDER:
         problems.append(f"provider {name or 'unknown'} answered, expected {PROVIDER}")
-    if credential != route.credential:
+    fell_back = route.accept_fallback and credential == "system"
+    if credential != route.credential and not fell_back:
         problems.append(
             f"credential {credential or 'unknown'} was used, expected {route.credential}"
         )
-    return observed_model, name, credential, failed, problems
+    return observed_model, name, credential, failed, fell_back, problems
 
 
 def _list(value) -> list:
@@ -319,7 +385,7 @@ def call(
             market = Decimal(0)  # unknown: settled at the worst case below
     market_known = market > 0
     market_cost = market if market_known else _usd(worst_case)  # unknown counts as the worst
-    observed_model, provider, credential, failed, problems = _observed(route, response)
+    observed_model, provider, credential, failed, fell_back, problems = _observed(route, response)
     overrun = None
     try:
         ledger.settle(
@@ -329,6 +395,7 @@ def call(
                 "model": route.model,
                 "observed_model": observed_model,
                 "credential": credential,
+                "fell_back": fell_back,
                 "failed_attempts": failed,
                 "generation_id": generation_id,
                 "gateway_cost": gateway_cost,
@@ -354,4 +421,5 @@ def call(
         market_cost_usd=market_cost,
         seconds=round(seconds, 2),
         failed_attempts=failed,
+        fell_back=fell_back,
     )

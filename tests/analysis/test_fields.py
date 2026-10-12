@@ -195,3 +195,19 @@ def test_a_page_whose_scan_fails_keeps_its_measured_size(monkeypatch):
     (page,) = extract_candidates(make_pdf([FORM]))
     assert page.candidates == [] and "RuntimeError" in page.reason
     assert (page.width_pt, page.height_pt) == (612.0, 792.0)
+
+
+def test_a_page_with_more_characters_than_the_scan_reads_skips_only_the_character_scans(
+    monkeypatch,
+):
+    monkeypatch.setattr(candidates_module, "CHAR_SCAN_LIMIT", 10)
+    (page,) = extract_candidates(make_pdf([FORM]))
+    assert sorted(c.kind for c in page.candidates) == ["box", "rule"]  # drawn shapes still read
+    assert "character scans skipped" in page.reason and "limit is 10" in page.reason
+
+
+def test_the_drawn_path_scan_reads_at_most_its_limit_of_objects(monkeypatch):
+    monkeypatch.setattr(candidates_module, "PATH_SCAN_LIMIT", 1)
+    (page,) = extract_candidates(make_pdf([FORM]))
+    assert [c.kind for c in page.candidates].count("box") == 0  # the second path is never read
+    assert "drawn-path scan stopped after reading 1 objects" in page.reason

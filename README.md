@@ -36,8 +36,9 @@ uv run --locked python -m eval.analyze SOURCE.pdf > /path/outside/the/repo/run.j
 The wrapper calls `studio.services.analysis.analyze`, the same service the app will use. Stdout is
 one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`), per-page
 text, geometry and rendered-image evidence, and flags (per page, or `page: null` for the whole
-document). Sources over 50 MiB are rejected. Parser diagnostics go to stderr. Run records contain
-source text, so keep them outside the repository.
+document). A source over 25 MiB, 400 pages or 4,000,000 characters of text, or whose analysis takes
+more than 3 minutes, fails with a record that names the limit. Parser diagnostics go to stderr. Run
+records contain source text, so keep them outside the repository.
 
 ## Draft fields through the model route
 
@@ -53,6 +54,8 @@ unless it passes.
 After every call, a model, provider or credential other than the one requested stops the run
 (`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
 and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
+With `--accept-fallback` (byok only), such a call passes instead: the run continues, and the record
+marks each call that fell back and counts them in `fallback_calls`.
 A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
 costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx,
 not a timeout) is recorded at $0 and stops the run. The record (source text and model

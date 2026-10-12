@@ -6,7 +6,11 @@ model: field drafting (stage A) and self-check (stage B) live in studio.services
 takes this record as its input, so its own stage fields report NOT_RUN.
 
 The service takes bytes and returns a record. It opens no files from Python and makes no network
-calls. PDFium is native code and may read system font files to draw fonts a PDF does not embed;
+calls. A source past any limit (bytes, pages, extracted text or time; Alex, October 12, 2026)
+fails with a FAILED record that names the limit. The page limit is checked on the page tree before
+any page is read, and on PDFium's count before any page is rendered. Time is checked between
+pages: one page's extraction or render cannot be interrupted, so a run can overshoot the limit by
+that page. PDFium is native code and may read system font files to draw fonts a PDF does not embed;
 fonts carry no answers, so this does not weaken generator isolation.
 """
 
@@ -17,6 +21,7 @@ import io
 import logging
 import re
 import threading
+import time
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, replace
 
@@ -27,9 +32,17 @@ from studio.services.render import RENDERER, PageImage, inventory_images
 
 INFERENCE_NOT_RUN = "NOT_RUN: analyze() never calls a model; stages A and B run in eval.infer"
 NO_TEXT_REASON = "no extractable text layer"
-MAX_SOURCE_BYTES = 50 * 1024 * 1024  # the agreed ceiling (guide §10)
+MAX_SOURCE_BYTES = 25 * 1024 * 1024  # the agreed limits (Alex, October 12, 2026; guide §10)
+MAX_PAGES = 400
+MAX_TEXT_CHARS = 4_000_000  # extracted text, all pages together
+TIME_LIMIT_S = 180  # one analysis, read and render together
+_clock = time.monotonic
 # A mechanics signal only. An underscore run is not a templated field.
 UNDERSCORE_RUN = re.compile(r"_{3,}")
+
+
+class LimitExceeded(Exception):
+    """The source passed a limit; the analysis stops and fails."""
 
 
 class AnalysisError(Exception):
@@ -155,17 +168,45 @@ def _declared_count(reader: PdfReader) -> int | None:
         return None
 
 
-def _read(source: bytes) -> tuple[list[PageRecord], int | None]:
+def _check_time(deadline: float, doing: str) -> None:
+    if _clock() > deadline:
+        raise LimitExceeded(f"the analysis passed its time limit of {TIME_LIMIT_S} seconds {doing}")
+
+
+def _check_pages(count: int, counted_by: str) -> None:
+    if count > MAX_PAGES:
+        raise LimitExceeded(f"{counted_by} {count} pages; the limit is {MAX_PAGES}")
+
+
+def _read(source: bytes, deadline: float) -> tuple[list[PageRecord], int | None]:
     reader = PdfReader(io.BytesIO(source), strict=False)
     if reader.is_encrypted and not reader.decrypt(""):
         raise FileNotDecryptedError("a password is required")
-    pages = [_page_record(n, page) for n, page in enumerate(_page_tree(reader), start=1)]
+    tree = _page_tree(reader)
+    _check_pages(len(tree), "the source has")
+    pages, chars = [], 0
+    for number, page in enumerate(tree, start=1):
+        _check_time(deadline, f"before reading page {number}")
+        record = _page_record(number, page)
+        chars += len(record.text)
+        if chars > MAX_TEXT_CHARS:
+            message = f"the text layer reaches {chars} characters by page {number}"
+            raise LimitExceeded(f"{message}; the limit is {MAX_TEXT_CHARS}")
+        pages.append(record)
     return pages, _declared_count(reader)
 
 
-def _with_images(source: bytes, pages: list[PageRecord]) -> tuple[list[PageRecord], int | None]:
+def _with_images(
+    source: bytes, pages: list[PageRecord], deadline: float
+) -> tuple[list[PageRecord], int | None]:
+    def before_page(index: int, count: int) -> None:
+        _check_pages(count, "PDFium found")
+        _check_time(deadline, f"before rendering page {index + 1}")
+
     try:
-        count, rendered = inventory_images(source)
+        count, rendered = inventory_images(source, before_page)
+    except LimitExceeded:
+        raise
     except Exception as error:  # PDFium could not open the document at all
         reason = f"PDFium could not open the document: {type(error).__name__}: {error}"
         return [replace(page, image_reason=reason) for page in pages], None
@@ -223,9 +264,12 @@ def analyze(source: bytes) -> AnalysisResult:
     """Inventory every page of a PDF given as bytes."""
     if len(source) > MAX_SOURCE_BYTES:
         raise AnalysisError(oversize_message(len(source)), source, [])
+    deadline = _clock() + TIME_LIMIT_S
     with _parser_diagnostics() as diagnostics:
         try:
-            pages, declared = _read(source)
+            pages, declared = _read(source, deadline)
+        except LimitExceeded as error:
+            raise AnalysisError(str(error), source, diagnostics) from error
         except FileNotDecryptedError as error:
             raise AnalysisError("the PDF needs a password", source, diagnostics) from error
         except DependencyError as error:
@@ -234,7 +278,10 @@ def analyze(source: bytes) -> AnalysisResult:
         except Exception as error:  # any parser failure is a FAILED record, never a traceback
             message = f"unreadable PDF: {type(error).__name__}: {error}"
             raise AnalysisError(message, source, diagnostics) from error
-    pages, rendered = _with_images(source, pages)
+    try:
+        pages, rendered = _with_images(source, pages, deadline)
+    except LimitExceeded as error:
+        raise AnalysisError(str(error), source, list(diagnostics)) from error
 
     flags = _document_flags(len(pages), declared, rendered) + _flags(pages)
     complete = not any(flag.blocks_complete for flag in flags)

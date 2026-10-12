@@ -409,3 +409,68 @@ def test_a_refused_page_call_stops_the_run_instead_of_repeating_on_every_page(tm
     record = run(tmp_path, fake, config=SERIAL)
     assert page_calls(fake) == [1] and record["status"] == "PARTIAL"
     assert record["stop_reason"].startswith("gateway: HTTP 400")
+
+
+FALLBACK = [
+    {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 403},
+    {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
+]
+
+
+def test_an_accepted_fallback_continues_and_is_recorded_on_every_call(tmp_path):
+    route = gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True)
+    config = dataclasses.replace(CONFIG, route=route)
+    record = run(tmp_path, FakeGateway(attempts=FALLBACK), config=config)
+    assert record["status"] == "COMPLETE"
+    assert record["route"] == {
+        "model": "openai/gpt-4.1",
+        "credential": "byok",
+        "accept_fallback": True,
+    }
+    assert record["preflight"]["fell_back"] is True
+    calls = [call for e in record["evidence"] for call in e["calls"]]
+    assert calls and all(call["fell_back"] for call in calls)
+    assert record["fallback_calls"] == len(calls) + 1  # the preflight too
+    assert record["observed_routes"] == [["openai/gpt-4.1", "openai", "system"]]
+
+
+def test_a_run_on_the_requested_key_records_no_fallback(tmp_path):
+    record = run(tmp_path, FakeGateway())
+    assert record["route"]["accept_fallback"] is False and record["fallback_calls"] == 0
+    assert not record["preflight"]["fell_back"]
+
+
+def test_each_page_call_is_reserved_at_the_size_of_the_image_sent(tmp_path, monkeypatch):
+    seen = []
+    real = gateway.worst_case_usd
+
+    def spy(route, text_chars, images, max_output_tokens):
+        seen.append(list(images))
+        return real(route, text_chars, images, max_output_tokens)
+
+    monkeypatch.setattr(gateway, "worst_case_usd", spy)
+    record = run(tmp_path, FakeGateway(), config=SERIAL)
+    sizes = [e["image_size_px"] for e in record["evidence"]]
+    assert seen[0] == []  # the preflight sends no image
+    form, prose = sizes
+    assert seen[1:] == [[tuple(form)], [tuple(form)], [tuple(prose)]]  # page 1 A and B, page 2 A
+
+
+def test_the_cli_passes_an_accepted_fallback_and_refuses_it_off_byok(tmp_path, monkeypatch):
+    code, _, out = cli(tmp_path, monkeypatch, "--accept-fallback")
+    assert json.loads(out.read_text())["route"]["accept_fallback"] is True
+    import eval.infer
+
+    args = [str(tmp_path / "source.pdf"), "--model", "openai/gpt-4.1", "--credential", "system"]
+    args += ["--roles", "Client", "--signer-mode", "synthetic", "--run-cap", "1"]
+    args += ["--ledger", str(tmp_path / "l2.jsonl"), "--out", str(tmp_path / "r2.json")]
+    with pytest.raises(SystemExit, match="only a byok route"):
+        eval.infer.main([*args, "--accept-fallback"])
+    assert not (tmp_path / "r2.json").exists()
+
+
+def test_the_reserved_image_size_is_read_from_the_png_sent():
+    image = render_rgb(make_source(), 1, 1.0)
+    assert inference._png_size(encode_png(image)) == (image.width, image.height)
+    with pytest.raises(ValueError, match="not a PNG"):
+        inference._png_size(b"GIF89a" + bytes(30))

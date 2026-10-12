@@ -3,7 +3,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 import pytest
 
@@ -249,7 +249,7 @@ def test_a_failed_attempt_on_the_other_credential_is_recorded(tmp_path):
 
 def test_money_stays_decimal_from_the_wire_to_the_ledger(tmp_path):
     book = ledger(tmp_path)
-    worst = gateway.worst_case_usd(ROUTE, 3000, 1, 100)
+    worst = gateway.worst_case_usd(ROUTE, 3000, [(768, 994)], 100)
     assert isinstance(worst, Decimal) and worst == worst.quantize(Decimal("0.000001"))
     call(book, FakeGateway(market=0.001), worst=worst)
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
@@ -282,7 +282,115 @@ def test_the_gpt5_models_are_reasoning_models():
         assert body["reasoning"]["effort"] == "medium" and "temperature" not in body
 
 
-def test_a_page_image_is_reserved_at_a_full_high_detail_patch_budget():
-    route = gateway.Route("openai/gpt-5-nano", "byok")  # 2,500 patches at 1.5 tokens each
+def test_an_accepted_fallback_to_system_credentials_is_recorded_and_passes(tmp_path):
+    attempts = [
+        {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 403},
+        {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
+    ]
+    book = ledger(tmp_path)
+    result = gateway.call(
+        gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True),
+        MESSAGES,
+        SCHEMA,
+        token="synthetic-token",
+        ledger=book,
+        label="test",
+        worst_case=0.05,
+        max_output_tokens=100,
+        transport=FakeGateway(attempts=attempts, cost=0.001, market=0.001),
+    )
+    assert result.fell_back and result.observed_credential == "system"
+    assert result.failed_attempts == ["openai/byok/403"]
+    settle = [row for row in rows(book) if row["kind"] == "settle"][0]
+    assert settle["fell_back"] is True and settle["usd"] == "0.001"
+
+
+def test_a_call_on_the_requested_key_did_not_fall_back(tmp_path):
+    route = gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True)
+    result = gateway.call(
+        route,
+        MESSAGES,
+        SCHEMA,
+        token="synthetic-token",
+        ledger=ledger(tmp_path),
+        label="test",
+        worst_case=0.05,
+        max_output_tokens=100,
+        transport=FakeGateway(),
+    )
+    assert not result.fell_back and result.observed_credential == "byok"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "problem"),
+    [
+        ({"model": "openai/gpt-5"}, "model openai/gpt-5 answered"),
+        ({"model_attempts": 2}, "2 model attempts"),
+    ],
+)
+def test_an_accepted_fallback_excuses_nothing_but_the_credential(tmp_path, kwargs, problem):
+    attempts = [
+        {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 403},
+        {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
+    ]
+    with pytest.raises(gateway.RouteViolation, match=problem):
+        gateway.call(
+            gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True),
+            MESSAGES,
+            SCHEMA,
+            token="synthetic-token",
+            ledger=ledger(tmp_path),
+            label="test",
+            worst_case=0.05,
+            max_output_tokens=100,
+            transport=FakeGateway(attempts=attempts, **kwargs),
+        )
+
+
+def test_only_a_byok_route_can_accept_a_fallback():
+    with pytest.raises(ValueError, match="byok"):
+        gateway.Route("openai/gpt-4.1", "system", accept_fallback=True)
+    with pytest.raises(ValueError, match="true or false"):
+        gateway.Route("openai/gpt-4.1", "byok", accept_fallback="yes")
+
+
+def test_o4_mini_is_offered_as_a_reasoning_model():
+    route = gateway.Route("openai/o4-mini", "byok")
+    assert gateway.PRICES[route.model] == (Decimal("0.0000011"), Decimal("0.0000044"))
+    assert "reasoning" in gateway.request_body(route, MESSAGES, SCHEMA, 9)
+
+
+@pytest.mark.parametrize(
+    ("model", "size", "tokens"),
+    [
+        ("openai/gpt-4.1", (768, 994), 85 + 170 * 4),  # 2 x 2 tiles of 512 px
+        ("openai/gpt-5", (768, 994), 70 + 140 * 4),
+        ("openai/gpt-4.1", (2000, 3000), 85 + 170 * 6),  # to 1365 x 2048, then 768 x 1152
+        ("openai/gpt-4.1", (300, 200), 85 + 170),  # never enlarged
+        ("openai/gpt-5.2", (768, 994), 922),  # 24 x 32 patches x 1.2, rounded up
+        ("openai/gpt-5-nano", (768, 994), 1152),  # x 1.5
+        ("openai/o4-mini", (768, 994), 1321),  # x 1.72
+        ("openai/gpt-6-luna", (768, 994), 1890),  # not in the guide: x 2.46, the largest
+        ("openai/gpt-6-luna", (40, 40), 85 + 170),  # not in the guide: or a tile, if more
+    ],
+)
+def test_image_tokens_follow_the_published_rule_for_the_image_sent(model, size, tokens):
+    assert gateway.image_tokens(model, *size) == tokens
+
+
+def test_every_offered_model_has_an_image_rule():
+    known = set(gateway.TILES) | set(gateway.PATCH_MULTIPLIERS) | gateway.UNPUBLISHED
+    assert set(gateway.PRICES) == known
+    assert not set(gateway.TILES) & set(gateway.PATCH_MULTIPLIERS)
+    assert not gateway.UNPUBLISHED & (set(gateway.TILES) | set(gateway.PATCH_MULTIPLIERS))
+
+
+def test_a_page_image_is_reserved_at_its_own_size():
+    route = gateway.Route("openai/gpt-5.2", "byok")
     price_in, _ = gateway.PRICES[route.model]
-    assert gateway.worst_case_usd(route, 0, 1, 0) >= gateway.RESERVE_FACTOR * 3750 * price_in
+    small = gateway.worst_case_usd(route, 0, [(768, 994)], 0)
+    large = gateway.worst_case_usd(route, 0, [(2048, 2048)], 0)  # 4,096 patches, uncapped
+    for usd, tokens in ((small, 922), (large, 4916)):
+        expected = gateway.RESERVE_FACTOR * tokens * price_in
+        assert usd == expected.quantize(gateway.MICRO, rounding=ROUND_CEILING)
+    assert gateway.worst_case_usd(route, 0, [], 0) == 0

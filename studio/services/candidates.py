@@ -6,7 +6,9 @@ the model decides which candidates are fields and may propose fields that have n
 
 Coordinates are source points with a top-left origin, measured from the page's visible area (the
 crop box within the media box), which is the area PDFium renders. Rotated pages are not read.
-Each shape reader stops after SCAN_LIMIT shapes, and the page then says so.
+Each shape reader stops after SCAN_LIMIT shapes, and the page then says so. What is read is bounded
+too: a page with more than CHAR_SCAN_LIMIT characters skips the two character scans, and the
+drawn-path scan stops after reading PATH_SCAN_LIMIT objects; the page says so in both cases.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from studio.services.render import _LOCK
 
 MAX_PER_PAGE = 120  # beyond this the page is reported as truncated, never silently cut
 SCAN_LIMIT = 2000  # shapes of one kind read per page at most
+CHAR_SCAN_LIMIT = 100_000  # characters per page the underscore and glyph scans read at most
+PATH_SCAN_LIMIT = 50_000  # drawn-path objects per page read at most
 BOX_GLYPHS = frozenset("\u2610\u25a1\u25a2\u2751\u2752\uf06f\uf0a8\uf071")  # last 3: Wingdings
 RULE_MIN_WIDTH, RULE_MAX_HEIGHT = 36.0, 2.0
 BOX_MIN, BOX_MAX, BOX_SKEW = 5.0, 18.0, 3.0
@@ -90,13 +94,17 @@ def _glyph_boxes(textpage, limit: int) -> list[tuple[float, float, float, float]
     return boxes
 
 
-def _paths(page, limit: int) -> tuple[list, list]:
+def _paths(page, limit: int) -> tuple[list, list, bool]:
     """Horizontal rules and checkbox-sized squares among top-level drawn paths; at most
-    limit + 1 of them together."""
+    limit + 1 of them together. The flag is set if PATH_SCAN_LIMIT objects were read and more
+    remain unread."""
     rules, boxes = [], []
-    for obj in page.get_objects(filter=[pdfium_raw.FPDF_PAGEOBJ_PATH], max_depth=1):
+    objects = page.get_objects(filter=[pdfium_raw.FPDF_PAGEOBJ_PATH], max_depth=1)
+    for read, obj in enumerate(objects):
         if len(rules) + len(boxes) > limit:
             break
+        if read == PATH_SCAN_LIMIT:
+            return rules, boxes, True
         left, bottom, right, top = obj.get_bounds()
         width, height = right - left, top - bottom
         if width >= RULE_MIN_WIDTH and height <= RULE_MAX_HEIGHT:
@@ -104,7 +112,7 @@ def _paths(page, limit: int) -> tuple[list, list]:
         elif BOX_MIN <= width <= BOX_MAX and BOX_MIN <= height <= BOX_MAX:
             if abs(width - height) <= BOX_SKEW:
                 boxes.append((left, bottom, right, top))
-    return rules, boxes
+    return rules, boxes, False
 
 
 def _page_candidates(number: int, page) -> PageCandidates:
@@ -116,10 +124,22 @@ def _page_candidates(number: int, page) -> PageCandidates:
     view_left, view_bottom, view_right, view_top = page.get_bbox()  # crop box within media box
     textpage = page.get_textpage()
     try:
-        runs = _underscore_runs(textpage, SCAN_LIMIT)
-        rules, boxes = _paths(page, SCAN_LIMIT)
-        glyphs = _glyph_boxes(textpage, SCAN_LIMIT)
-        stopped = max(len(runs), len(rules) + len(boxes), len(glyphs)) > SCAN_LIMIT
+        notes = []
+        chars = textpage.count_chars()
+        if chars > CHAR_SCAN_LIMIT:
+            runs, glyphs = [], []
+            notes.append(
+                f"character scans skipped: the page has {chars} characters; "
+                f"the limit is {CHAR_SCAN_LIMIT}"
+            )
+        else:
+            runs = _underscore_runs(textpage, SCAN_LIMIT)
+            glyphs = _glyph_boxes(textpage, SCAN_LIMIT)
+        rules, boxes, unread = _paths(page, SCAN_LIMIT)
+        if unread:
+            notes.append(f"drawn-path scan stopped after reading {PATH_SCAN_LIMIT} objects")
+        if max(len(runs), len(rules) + len(boxes), len(glyphs)) > SCAN_LIMIT:
+            notes.append(f"scan stopped after {SCAN_LIMIT} shapes of one kind; more exist")
         found = [("underscore", box) for box in runs[:SCAN_LIMIT]]
         found += [("rule", box) for box in rules[:SCAN_LIMIT]]
         found += [("box", box) for box in (boxes[:SCAN_LIMIT] + glyphs[:SCAN_LIMIT])]
@@ -157,8 +177,7 @@ def _page_candidates(number: int, page) -> PageCandidates:
     finally:
         textpage.close()
     truncated = len(found) if len(found) > MAX_PER_PAGE else None
-    reason = f"scan stopped after {SCAN_LIMIT} shapes of one kind; more exist" if stopped else ""
-    return PageCandidates(number, out, truncated, reason, **size)
+    return PageCandidates(number, out, truncated, "; ".join(notes), **size)
 
 
 def _measured(number: int, page, reason: str) -> PageCandidates:
