@@ -459,6 +459,14 @@ def test_a_call_that_fell_back_and_then_failed_is_still_counted(tmp_path):
     assert page["preflight"]["fell_back"] is True and page["fallback_calls"] == 2
 
 
+def test_a_fallback_that_is_not_accepted_stops_the_run_and_is_counted(tmp_path):
+    route = gateway.Route("openai/gpt-4.1", "byok")
+    config = dataclasses.replace(SERIAL, route=route)
+    record = run(tmp_path, FakeGateway(attempts=FALLBACK), config=config)
+    assert record["status"] == "ROUTE_VIOLATION"
+    assert record["preflight"]["fell_back"] is True and record["fallback_calls"] == 1
+
+
 def test_a_run_on_the_requested_key_records_no_fallback(tmp_path):
     record = run(tmp_path, FakeGateway())
     assert record["route"]["accept_fallback"] is False and record["fallback_calls"] == 0

@@ -131,7 +131,9 @@ class GatewayError(Exception):
 class Route:
     model: str
     credential: str  # "byok" (Alex's key) or "system" (Vercel credits)
-    accept_fallback: bool = False  # a byok call that succeeds on system credentials passes
+    # A byok call answered on system credentials passes, but only if its routing metadata also
+    # shows a failed byok attempt on the requested model.
+    accept_fallback: bool = False
 
     def __post_init__(self):
         if self.model not in PRICES:
@@ -331,7 +333,7 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], b
             f"credential {credential or 'unknown'} was used, expected {route.credential}"
         )
     elif fell_back and not byok_failed:
-        problems.append("credential system was used with no failed byok attempt before it")
+        problems.append("credential system was used with no failed byok attempt on the model")
     return observed_model, name, credential, failed, fell_back, problems
 
 

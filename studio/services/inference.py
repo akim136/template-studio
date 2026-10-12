@@ -12,8 +12,10 @@ Before any page is sent, one preflight call with no page content proves the rout
 cannot be told to refuse a fallback from Alex's key to Vercel's credentials, so the route is
 also checked on every answer, and a violation stops the run; calls already in flight when it
 happens (at most `workers`) have been sent. A route that accepts that fallback continues, and
-every call that fell back is marked in the record and counted in `fallback_calls`. A rotated
-page is not sent: its fields need an audited normalizer first.
+each page call that fell back is marked in its evidence. On every byok run, `fallback_calls`
+counts the calls that fell back, accepted or not, including the preflight and any call that then
+failed; such a failed call appears only in the count and its ledger row. A rotated page is not
+sent: its fields need an audited normalizer first.
 
 Stage A and stage B are separate, immutable records. A page whose stage B failed has no final
 fields; stage A is never substituted for it. Rendering a page is not inspection: a page counts as

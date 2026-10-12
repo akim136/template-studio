@@ -54,8 +54,10 @@ unless it passes.
 After every call, a model, provider or credential other than the one requested stops the run
 (`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
 and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
-With `--accept-fallback` (byok only), such a call passes instead: the run continues, and the record
-marks each call that fell back and counts them in `fallback_calls`.
+With `--accept-fallback` (byok only), such a call passes instead, but only if it also shows a failed
+attempt on your key: the run continues, and each page call that fell back is marked in its
+evidence. Every byok run counts the calls that fell back, accepted or not, in `fallback_calls`; a
+call that fell back and then failed appears only in that count and in its ledger row.
 A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
 costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx,
 not a timeout) is recorded at $0 and stops the run. The record (source text and model

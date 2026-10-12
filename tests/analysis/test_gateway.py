@@ -59,8 +59,9 @@ def test_a_silent_fallback_to_system_credentials_is_a_route_violation_after_sett
         {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
     ]
     book = ledger(tmp_path)
-    with pytest.raises(gateway.RouteViolation, match="credential system"):
+    with pytest.raises(gateway.RouteViolation, match="credential system") as raised:
         call(book, FakeGateway(attempts=attempts, cost=0.001, market=0.001))
+    assert raised.value.fell_back is True
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
     assert settle["credential"] == "system" and settle["usd"] == "0.001"
     assert settle["fell_back"] is True  # what happened, whether or not it was accepted
@@ -390,6 +391,8 @@ def test_o4_mini_is_offered_as_a_reasoning_model():
         ("openai/gpt-4.1", (2000, 3000), 85 + 170 * 6),  # to 1365 x 2048, then 768 x 1152
         ("openai/gpt-4.1", (300, 200), 85 + 170),  # never enlarged
         ("openai/gpt-4.1", (769, 1026), 85 + 170 * 6),  # 768 x 1024.67 counts as 1025 rows
+        ("openai/gpt-4.1", (770, 1027), 85 + 170 * 6),  # 768 x 1024.33: rounding would give 4
+        ("openai/gpt-4.1", (5000, 1251), 85 + 170 * 8),  # 2048 x 512.41 counts as 513 rows
         ("openai/gpt-5.2", (768, 994), 922),  # 24 x 32 patches x 1.2, rounded up
         ("openai/gpt-5-nano", (768, 994), 1152),  # x 1.5
         ("openai/o4-mini", (768, 994), 1321),  # x 1.72
