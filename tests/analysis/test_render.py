@@ -73,3 +73,16 @@ def test_render_png_is_an_rgb_png_with_valid_chunks():
     assert len(raw) == height * (1 + width * 3)
     red, green, blue = raw[1:4]  # first pixel after the row's filter byte
     assert red > 200 and green < 50 and blue < 50
+
+
+def test_the_inventory_asks_before_each_page_and_can_be_stopped(monkeypatch):
+    asked = []
+
+    def before_page(index, total):
+        asked.append((index, total))
+        if index == 1:
+            raise RuntimeError("synthetic stop")
+
+    with pytest.raises(RuntimeError, match="synthetic stop"):  # never recorded as a page failure
+        inventory_images(make_pdf(["one", "two", "three"]), before_page)
+    assert asked == [(0, 3), (1, 3)]

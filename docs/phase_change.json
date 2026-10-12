@@ -4,5 +4,5 @@
   "features": [
     "F-P1-analysis"
   ],
-  "summary": "Shared analysis service: text and geometry (pypdf), a rendered image of every page (PDFium, native), AES decryption (cryptography), page and document flags, and a full page inventory over source bytes; an evaluation wrapper with stdout/JSON separation; file-isolation tests. No inference."
+  "summary": "Shared analysis service: text and geometry (pypdf), a rendered image of every page (PDFium, native), AES decryption (cryptography), page and document flags, and a full page inventory over source bytes; an evaluation wrapper with stdout/JSON separation; file-isolation tests. Model route: gateway client with a content-free route preflight, per-call route checks and a capped spend ledger, field candidates, stage A drafting and stage B self-check, a checker envelope, and a transport-level isolation test (no development-case inference yet)."
 }

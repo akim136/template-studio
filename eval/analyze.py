@@ -31,7 +31,7 @@ CHUNK_BYTES = 1024 * 1024
 
 
 @contextlib.contextmanager
-def _stdout_to_stderr():
+def stdout_to_stderr():
     sys.stdout.flush()
     saved = os.dup(1)
     os.dup2(2, 1)
@@ -46,7 +46,7 @@ def _stdout_to_stderr():
         os.close(saved)
 
 
-def _read_source(path: Path) -> bytes:
+def read_source(path: Path) -> bytes:
     """The source's bytes. Only a regular file is opened, and an oversize file is hashed in
     chunks for its failure record but never held in memory whole."""
     if not stat.S_ISREG(path.stat().st_mode):  # a FIFO or device could block or never end
@@ -70,9 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     stdout = sys.stdout
-    with _stdout_to_stderr():
+    with stdout_to_stderr():
         try:
-            record, code = analyze(_read_source(args.source)).to_dict(), 0
+            record, code = analyze(read_source(args.source)).to_dict(), 0
         except AnalysisError as error:
             record, code = error.to_dict(), 1
         except OSError as error:

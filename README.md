@@ -36,8 +36,33 @@ uv run --locked python -m eval.analyze SOURCE.pdf > /path/outside/the/repo/run.j
 The wrapper calls `studio.services.analysis.analyze`, the same service the app will use. Stdout is
 one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`), per-page
 text, geometry and rendered-image evidence, and flags (per page, or `page: null` for the whole
-document). Sources over 50 MiB are rejected. Parser diagnostics go to stderr. Run records contain
-source text, so keep them outside the repository.
+document). A source over 25 MiB, 400 pages or 4,000,000 characters of text, or whose analysis passes
+3 minutes (checked between pages and at the end), fails with a record that names the limit. Parser diagnostics go to stderr. Run
+records contain source text, so keep them outside the repository.
+
+## Draft fields through the model route
+
+```sh
+uv run --locked python -m eval.infer SOURCE.pdf --model openai/gpt-4.1 --credential byok \
+    --roles Client,CounterSigner --signer-mode MODE --run-cap 2.00 \
+    --ledger PRIVATE/spend-ledger.jsonl --env-file PRIVATE/.env.local --out PRIVATE/run.json
+```
+
+Calls go through Vercel AI Gateway to OpenAI only, with no tools and no fallback models. Every route
+choice and cap is explicit. One call with no page content checks the route, and no page is sent
+unless it passes.
+After every call, a model, provider or credential other than the one requested stops the run
+(`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
+and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
+With `--accept-fallback` (byok only), such a call passes instead, but only if it also shows a failed
+attempt on your key: the run continues, and each page call that fell back is marked in its
+evidence. Every byok run counts the calls that fell back, accepted or not, in `fallback_calls`; a
+call that fell back and then failed appears only in that count and in its ledger row.
+A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
+costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx,
+not a timeout) is recorded at $0 and stops the run. The record (source text and model
+answers) goes to `--out`, which must be outside the repository: it is created owner-only before any
+call and made read-only at the end. Stdout gets a summary with counts and spend only.
 
 ## Checks
 
