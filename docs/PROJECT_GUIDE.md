@@ -1,8 +1,8 @@
 # Homebase Template Studio: project guide
 
-**Revision 1.0.14-repo.3 · October 11, 2026 · Owner: Alex Kim**
+**Revision 1.0.14-repo.4 · October 11, 2026 · Owner: Alex Kim**
 **Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. This revision is the `scope_update` that advances the active phase to P1 when Alex merges it.
-- Analysis is NOT_IMPLEMENTED.
+- Analysis is NOT_IMPLEMENTED in the app. PR2 (draft) adds the shared analysis service: text, geometry and a full page inventory. Field drafting and self-check are NOT_RUN.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
 - There is no inference and no spend.
 
@@ -116,6 +116,7 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
 
   Missing pages, truncated output or invalid output never count as a complete analysis.
 - **Diagnostics stay out of JSON.** Parser diagnostics go to stderr, and JSON output stays parseable. A regression test is required. One development case printed parser diagnostics on stdout and broke its JSON output.
+  - PR2: the wrapper sends Python-level stdout to stderr while it analyzes, and a regression test covers it. A native library that writes straight to file descriptor 1 would bypass this; pypdf is pure Python.
 - **Underscores are not templates.** Underscore-run extraction is a mechanics capability, not complete templatization. Drawn rules, checkboxes and label-only fields are capabilities to measure, not to drop silently.
 - **No substitutes.** Sample or fixture fields never stand in for real analysis.
 - **Generator isolation.** The generating model's requests and tools receive only the source PDF, approved business rules and scoped tools. They must never reach:
@@ -216,18 +217,18 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 |---|---|
 | Phase | P1 once this `scope_update` merges. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
-| Analysis | NOT_IMPLEMENTED |
+| Analysis | The app: NOT_IMPLEMENTED. PR2 (draft): `studio.services.analysis` extracts text and geometry and inventories every page, checked against the page tree's `/Count`. Stage A (first draft) and stage B (self-check) are NOT_RUN because inference is not authorized. Page images are NOT_RUN because no rasterizer has been adopted. The comparator checker and its 26 controls are not adopted yet (NOT RUN). |
 | Vercel access | Protection applied to all deployments. Alex's signed-in check passed. Named invitations NOT_APPLIED (section 6). |
 | Hosted CI | Passed on PR #1, PR #2 and each push to `main`, generic rules only. |
 | Private inputs | NOT RUN, because they were not supplied. |
 | Inference | None. $0. |
-| Next | PR2 `spike/studio-analysis`, a P1 feature PR declaring `F-P1-analysis`. Extraction and page inventory need no inference. Classification and self-check wait for an authorized model route and spend cap. |
+| Next | Alex reviews PR2 and decides the PDF library license, the rasterizer, the private-PDF location, and the model route and spend cap. Then a mechanics-only run on the private PDFs, and inference once authorized. |
 
 ## 10. Open decisions
 
 - The assessment time budget, both elapsed and remaining.
 - The private-PDF location for this workspace, and evaluator-only storage for the baseline.
-- The PDF library and its license (for example, AGPL versus commercial) before parser adoption, plus a native-dependency smoke test on the deployment runtime.
+- The PDF library and its license before parser adoption, plus a native-dependency smoke test on the deployment runtime. PR2 proposes pypdf 6.20.0 (BSD-3-Clause, pure Python, no native dependency) for text and geometry, pending Alex's sign-off. Page images need a rasterizer, which is a separate license and native-dependency decision: pypdfium2 bundles a native PDFium binary, and PyMuPDF is AGPL or commercial.
 - The model route, provider restriction and spend cap. Reference adjudication and tolerances.
 - Named access for seven people: a Pro upgrade or another route, since Hobby allows one external collaborator.
 - The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
@@ -241,3 +242,4 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 | 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
 | 1.0.14-repo.2 | The contract test no longer pins P0. Rehearsing the P1 `scope_update` after the PR1 merge showed CI would fail, and only a feature change could fix it. |
 | 1.0.14-repo.3 | `scope_update` to P1, adding `F-P1-analysis`. Records Alex's signed-in check. |
+| 1.0.14-repo.4 | PR2 draft: shared analysis service with full page inventory, evaluation wrapper, and stdout/JSON and isolation tests. pypdf is proposed. |

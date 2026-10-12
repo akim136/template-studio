@@ -1,6 +1,8 @@
 {
   "phase": "P1",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Advance to P1 and add F-P1-analysis, the feature PR2 (spike/studio-analysis) declares."
+  "kind": "feature",
+  "features": [
+    "F-P1-analysis"
+  ],
+  "summary": "Shared analysis service: text, geometry and a full page inventory over source bytes, an evaluation wrapper with stdout/JSON separation, and isolation tests. No inference."
 }
