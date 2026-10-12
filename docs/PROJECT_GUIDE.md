@@ -1,6 +1,6 @@
 # Homebase Template Studio: project guide
 
-**Revision 1.0.14-repo.1 · October 11, 2026 · Owner: Alex Kim**
+**Revision 1.0.14-repo.2 · October 11, 2026 · Owner: Alex Kim**
 **Status:** Alex accepted the P0 foundation (PR1) for merge through PR #1 on October 11, 2026, once all checks were green.
 - Analysis is NOT_IMPLEMENTED.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
@@ -213,7 +213,7 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 
 | Field | Value |
 |---|---|
-| Phase | P0 (PR1). Accepted by Alex for a merge commit into `main` through PR #1 once all checks were green. |
+| Phase | P0. PR1 was merged into `main` through PR #1 with a merge commit, after all checks were green. A follow-up P0 fix lets the phase advance (revision 1.0.14-repo.2). |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
 | Analysis | NOT_IMPLEMENTED |
 | Vercel access | Protection applied to all deployments. Named invitations NOT_APPLIED (section 6). |
@@ -238,3 +238,4 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 | Revision | Change |
 |---|---|
 | 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
+| 1.0.14-repo.2 | The contract test no longer pins P0. Rehearsing the P1 `scope_update` after the PR1 merge showed CI would fail, and only a feature change could fix it. |

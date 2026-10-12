@@ -1,6 +1,8 @@
 {
   "phase": "P0",
-  "kind": "bootstrap",
-  "features": ["F-P0-foundation"],
-  "summary": "PR1 foundation. main has no phase policy, so Alex's manual review is the gate."
+  "kind": "feature",
+  "features": [
+    "F-P0-foundation"
+  ],
+  "summary": "The contract test stops pinning P0, so the P1 scope_update can pass CI."
 }
