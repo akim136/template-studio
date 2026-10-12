@@ -8,6 +8,7 @@ silently.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 
 from studio.services.candidates import Candidate
@@ -121,6 +122,34 @@ def _geometry(raw, kind, candidate, scale, page_size):
     return round(x, 2), round(y, 2), round(width, 2), round(height, 2), "model_box"
 
 
+def _number(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _malformed(raw, roles: list[str]) -> str:
+    """Why a field does not match the schema, or "". The gateway enforces the strict schema;
+    this checks it again rather than trusting it, and never coerces a value."""
+    if not isinstance(raw, dict):
+        return "the field is not an object"
+    if raw.get("type") not in TYPES:
+        return f"unknown type {raw.get('type')!r}"
+    if raw.get("role") not in [*roles, SENDER]:
+        return f"unknown role {raw.get('role')!r}"
+    if not isinstance(raw.get("required"), bool):
+        return "required must be true or false"
+    for key in ("candidate_id", "merge_name"):
+        if raw.get(key) is not None and not isinstance(raw[key], str):
+            return f"{key} must be text or null"
+    if not isinstance(raw.get("evidence"), str):
+        return "evidence must be text"
+    box = raw.get("box")
+    if not isinstance(box, dict) or not all(
+        _number(box.get(key)) for key in ("left", "top", "width", "height")
+    ):
+        return "the box needs four finite numbers"
+    return ""
+
+
 def resolve(
     page: int,
     raws: list[dict],
@@ -133,6 +162,10 @@ def resolve(
     by_id = {candidate.id: candidate for candidate in candidates}
     fields, rejected = [], []
     for raw in raws:
+        reason = _malformed(raw, roles)
+        if reason:
+            rejected.append(Rejected(page, raw, reason))
+            continue
         kind, role, name = raw["type"], raw["role"], raw["merge_name"]
         if kind in MERGE_TYPES and (role != SENDER or name not in MERGE_NAMES):
             rejected.append(Rejected(page, raw, "a merge field needs role sender and a merge name"))
@@ -156,7 +189,7 @@ def resolve(
                 page=page,
                 type=kind,
                 signer=SENDER if role == SENDER else roles.index(role),
-                required=bool(raw["required"]),
+                required=raw["required"],
                 x=x,
                 y=y,
                 width=width,

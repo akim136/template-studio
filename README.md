@@ -47,15 +47,15 @@ uv run --locked python -m eval.infer SOURCE.pdf --model openai/gpt-4.1 --credent
     --ledger PRIVATE/spend-ledger.jsonl --env-file PRIVATE/.env.local --out PRIVATE/run.json
 ```
 
-Calls go through Vercel AI Gateway to OpenAI only, with no tools and no fallback models. Every
-route choice and cap is explicit. One call with no page content checks the route before any page
-is sent. After every call, a model, provider or credential other than the one requested stops the
-run (`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials
-mid-run, and that shows only after the call, so up to `--workers` pages may already be in flight.
+Calls go through Vercel AI Gateway to OpenAI only, with no tools and no fallback models. Every route
+choice and cap is explicit. One call with no page content checks the route before any page is sent.
+After every call, a model, provider or credential other than the one requested stops the run
+(`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
+and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
 A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
 costs more than it reserved stops the run (`BUDGET_STOPPED`). The record (source text and model
-answers) is written owner-only and read-only to `--out`, which must be outside the repository.
-Stdout gets a summary with counts and spend only.
+answers) goes to `--out`, which must be outside the repository: it is created owner-only before any
+call and made read-only at the end. Stdout gets a summary with counts and spend only.
 
 ## Checks
 

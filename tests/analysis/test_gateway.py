@@ -3,6 +3,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from decimal import Decimal
 
 import pytest
 
@@ -40,7 +41,7 @@ def rows(book):
 def test_a_byok_call_settles_the_market_cost_from_the_generation_lookup(tmp_path):
     book, fake = ledger(tmp_path), FakeGateway(market=0, lookup=0.0042)
     result = call(book, fake)
-    assert result.observed_credential == "byok" and result.market_cost_usd == 0.0042
+    assert result.observed_credential == "byok" and result.market_cost_usd == Decimal("0.0042")
     assert [url for url, _, _ in fake.requests][1].startswith(gateway.GENERATION_URL)
     assert book.totals() == (0.0042, 0.0042)
 
@@ -49,7 +50,7 @@ def test_an_unknown_market_cost_is_settled_at_the_worst_case(tmp_path):
     book = ledger(tmp_path)
     call(book, FakeGateway(market=0, lookup=0), worst=0.05)
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
-    assert settle["usd"] == 0.05 and settle["market_cost_known"] is False
+    assert settle["usd"] == "0.05" and settle["market_cost_known"] is False
 
 
 def test_a_silent_fallback_to_system_credentials_is_a_route_violation_after_settling(tmp_path):
@@ -61,7 +62,7 @@ def test_a_silent_fallback_to_system_credentials_is_a_route_violation_after_sett
     with pytest.raises(gateway.RouteViolation, match="credential system"):
         call(book, FakeGateway(attempts=attempts, cost=0.001, market=0.001))
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
-    assert settle["credential"] == "system" and settle["usd"] == 0.001
+    assert settle["credential"] == "system" and settle["usd"] == "0.001"
 
 
 @pytest.mark.parametrize(
@@ -212,3 +213,41 @@ def test_a_call_that_costs_more_than_its_reservation_stops_the_run(tmp_path):
     with pytest.raises(BudgetExceeded, match="above its reserved worst case"):
         call(book, FakeGateway(market=0.5), worst=0.05)
     assert book.totals() == (0.5, 0.5)  # the real cost is recorded, not the estimate
+
+
+def test_an_attempt_on_another_provider_is_a_violation_even_when_it_failed(tmp_path):
+    attempts = [
+        {"provider": "azure", "credentialType": "byok", "success": False, "statusCode": 500},
+        {"provider": "openai", "credentialType": "byok", "success": True, "statusCode": 200},
+    ]
+    with pytest.raises(gateway.RouteViolation, match="provider azure"):
+        call(ledger(tmp_path), FakeGateway(attempts=attempts))
+
+
+def test_a_failed_attempt_on_the_other_credential_is_recorded(tmp_path):
+    attempts = [
+        {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 404},
+        {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
+    ]
+    result = gateway.call(
+        gateway.Route("openai/gpt-4.1", "system"),
+        MESSAGES,
+        SCHEMA,
+        token="synthetic-token",
+        ledger=ledger(tmp_path),
+        label="test",
+        worst_case=0.05,
+        max_output_tokens=100,
+        transport=FakeGateway(attempts=attempts),
+    )
+    assert result.failed_attempts == ["openai/byok/404"]
+    assert not hasattr(result, "gateway_cost_usd")
+
+
+def test_money_stays_decimal_from_the_wire_to_the_ledger(tmp_path):
+    book = ledger(tmp_path)
+    worst = gateway.worst_case_usd(ROUTE, 3000, 1, 100)
+    assert isinstance(worst, Decimal) and worst == worst.quantize(Decimal("0.000001"))
+    call(book, FakeGateway(market=0.001), worst=worst)
+    settle = [row for row in rows(book) if row["kind"] == "settle"][0]
+    assert settle["usd"] == "0.001" and settle["market_cost"] == "0.001"

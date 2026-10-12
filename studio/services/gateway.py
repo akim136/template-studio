@@ -9,7 +9,8 @@ A response whose routing cannot be read at all is a fatal GatewayError, and its 
 stays at the worst case.
 
 The gateway reports $0 for BYOK calls, because the provider bills them directly, so the ledger
-settles the market cost, read from the response or from the generation lookup.
+settles the market cost, read from the response or from the generation lookup. Money is Decimal
+from the wire to the ledger.
 
 The token comes from VERCEL_OIDC_TOKEN or an env file outside the repository, and it is never
 logged, stored in a record or included in an error.
@@ -25,7 +26,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
 
 from studio.services.spend import BudgetExceeded, SpendLedger
@@ -41,17 +43,21 @@ ERROR_CODE = re.compile(r"[a-z0-9_.-]{1,64}")
 
 # USD per token (input, output), from the gateway's model list on October 12, 2026.
 PRICES = {
-    "openai/gpt-4.1": (2e-6, 8e-6),
-    "openai/gpt-6.1-sol": (2e-6, 1e-5),
-    "openai/gpt-6-luna": (1e-7, 5e-7),
-    "openai/gpt-6-astra": (1e-5, 5e-5),
+    model: (Decimal(price_in) / 1_000_000, Decimal(price_out) / 1_000_000)
+    for model, (price_in, price_out) in {  # USD per million tokens
+        "openai/gpt-4.1": ("2", "8"),
+        "openai/gpt-6.1-sol": ("2", "10"),
+        "openai/gpt-6-luna": ("0.1", "0.5"),
+        "openai/gpt-6-astra": ("10", "50"),
+    }.items()
 }
 # Reasoning models take a reasoning effort instead of a temperature; the reasoning itself is
 # billed as output and is not returned.
 REASONING_MODELS = frozenset({"openai/gpt-6.1-sol", "openai/gpt-6-luna", "openai/gpt-6-astra"})
 REASONING_EFFORT = "medium"
 IMAGE_TOKENS_WORST = 1600  # per page image: a high-detail page tiles to well under this
-RESERVE_FACTOR = 1.5  # headroom over the token estimate
+RESERVE_FACTOR = Decimal("1.5")  # headroom over the token estimate
+MICRO = Decimal("0.000001")
 
 Transport = Callable[[str, bytes | None, dict[str, str]], bytes]
 
@@ -90,9 +96,9 @@ class CallResult:
     generation_id: str
     input_tokens: int
     output_tokens: int
-    gateway_cost_usd: float
-    market_cost_usd: float
+    market_cost_usd: Decimal
     seconds: float
+    failed_attempts: list[str] = field(default_factory=list)  # provider/credential/status
 
 
 def read_token(env_file: Path | None = None) -> str:
@@ -141,17 +147,25 @@ def _dict(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _usd(value) -> float:
+def _usd(value) -> Decimal:
+    """A cost as an exact Decimal; anything missing, negative or unreadable is 0 (unknown)."""
     try:
-        return max(float(value or 0), 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+        usd = Decimal(str(value)) if value is not None else Decimal(0)
+    except (InvalidOperation, ValueError):
+        return Decimal(0)
+    return usd if usd.is_finite() and usd > 0 else Decimal(0)
 
 
-def worst_case_usd(route: Route, text_chars: int, images: int, max_output_tokens: int) -> float:
+def _count(value) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def worst_case_usd(route: Route, text_chars: int, images: int, max_output_tokens: int) -> Decimal:
+    """An upper estimate of one call's cost, rounded up to a millionth of a dollar."""
     price_in, price_out = PRICES[route.model]
-    input_tokens = text_chars / 3 + images * IMAGE_TOKENS_WORST
-    return RESERVE_FACTOR * (input_tokens * price_in + max_output_tokens * price_out)
+    input_tokens = Decimal(text_chars) / 3 + images * IMAGE_TOKENS_WORST
+    usd = RESERVE_FACTOR * (input_tokens * price_in + max_output_tokens * price_out)
+    return usd.quantize(MICRO, rounding=ROUND_CEILING)
 
 
 def request_body(route: Route, messages: list[dict], schema: dict, max_output_tokens: int) -> dict:
@@ -173,23 +187,36 @@ def request_body(route: Route, messages: list[dict], schema: dict, max_output_to
     return body
 
 
-def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str]]:
-    """(model, provider, credential, problems) from the response's routing metadata."""
+def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], list[str]]:
+    """(model, provider, credential, failed attempts, problems) from the routing metadata.
+
+    Every attempt, failed or not, must be on the pinned provider. A failed attempt on the other
+    credential is recorded, not refused: with the system credential the gateway tries Alex's key
+    first, and that fails for every model his key cannot reach."""
     gateway = _dict(_dict(_message(response).get("provider_metadata")).get("gateway"))
     model_attempts = _dict(gateway.get("routing")).get("modelAttempts")
     model_attempts = [_dict(a) for a in model_attempts] if isinstance(model_attempts, list) else []
     problems = []
     if len(model_attempts) != 1:
         problems.append(f"{len(model_attempts)} model attempts, expected exactly 1")
-    winners = [
+    attempts = [
         (str(attempt.get("canonicalSlug", "")), _dict(provider))
         for attempt in model_attempts
-        for provider in attempt.get("providerAttempts") or []
-        if _dict(provider).get("success") is True
+        for provider in _list(attempt.get("providerAttempts"))
     ]
+    others = sorted({str(p.get("provider") or "unknown") for _, p in attempts} - {PROVIDER})
+    if others:
+        problems.append(f"provider {', '.join(others)} attempted, expected {PROVIDER} only")
+    failed = [
+        f"{p.get('provider') or 'unknown'}/{p.get('credentialType') or 'unknown'}/"
+        f"{p.get('statusCode', '')}"
+        for _, p in attempts
+        if p.get("success") is not True
+    ]
+    winners = [(slug, p) for slug, p in attempts if p.get("success") is True]
     if len(winners) != 1:
         problems.append(f"{len(winners)} successful provider attempts, expected exactly 1")
-        return "", "", "", problems
+        return "", "", "", failed, problems
     model, provider = winners[0]
     observed_model = model
     name, credential = provider.get("provider", ""), provider.get("credentialType", "")
@@ -201,7 +228,11 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str]]:
         problems.append(
             f"credential {credential or 'unknown'} was used, expected {route.credential}"
         )
-    return observed_model, name, credential, problems
+    return observed_model, name, credential, failed, problems
+
+
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
 
 
 def _message(response: dict) -> dict:
@@ -211,7 +242,7 @@ def _message(response: dict) -> dict:
 def _parse(raw: bytes) -> dict:
     """The response, if it has the one message the route check reads; otherwise fatal."""
     try:
-        response = json.loads(raw)
+        response = json.loads(raw, parse_float=Decimal)
         if isinstance(response, dict) and isinstance(
             _dict(response["choices"][0])["message"], dict
         ):
@@ -254,13 +285,14 @@ def call(
     market = _usd(usage.get("market_cost") or gateway.get("marketCost"))
     if not market and generation_id:
         try:
-            lookup = _dict(json.loads(transport(GENERATION_URL + generation_id, None, headers)))
+            reply = transport(GENERATION_URL + generation_id, None, headers)
+            lookup = _dict(json.loads(reply, parse_float=Decimal))
             market = _usd(_dict(lookup.get("data") or lookup).get("market_cost"))
         except (GatewayError, ValueError, TypeError):
-            market = 0.0  # unknown: settled at the worst case below
+            market = Decimal(0)  # unknown: settled at the worst case below
     market_known = market > 0
-    market_cost = market if market_known else worst_case  # an unknown cost counts as the worst
-    observed_model, provider, credential, problems = _observed(route, response)
+    market_cost = market if market_known else _usd(worst_case)  # unknown counts as the worst
+    observed_model, provider, credential, failed, problems = _observed(route, response)
     overrun = None
     try:
         ledger.settle(
@@ -270,6 +302,7 @@ def call(
                 "model": route.model,
                 "observed_model": observed_model,
                 "credential": credential,
+                "failed_attempts": failed,
                 "generation_id": generation_id,
                 "gateway_cost": gateway_cost,
                 "market_cost": market_cost,
@@ -289,9 +322,9 @@ def call(
         observed_provider=provider,
         observed_credential=credential,
         generation_id=generation_id,
-        input_tokens=int(_usd(usage.get("prompt_tokens"))),
-        output_tokens=int(_usd(usage.get("completion_tokens"))),
-        gateway_cost_usd=gateway_cost,
+        input_tokens=_count(usage.get("prompt_tokens")),
+        output_tokens=_count(usage.get("completion_tokens")),
         market_cost_usd=market_cost,
         seconds=round(seconds, 2),
+        failed_attempts=failed,
     )

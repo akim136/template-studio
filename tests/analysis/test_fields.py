@@ -155,3 +155,33 @@ def test_the_shape_scan_stops_at_its_limit_and_says_so(monkeypatch):
     monkeypatch.setattr(candidates_module, "SCAN_LIMIT", 1)
     page = extract_candidates(make_pdf([FORM]))[0]
     assert len(page.candidates) <= 3 and "scan stopped" in page.reason
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"required": "false"}, "required"),
+        ({"type": "stamp"}, "unknown type"),
+        ({"role": "Notary"}, "unknown role"),
+        ({"box": {"left": "1", "top": 0, "width": 10, "height": 10}}, "box"),
+        ({"box": {"left": float("nan"), "top": 0, "width": 10, "height": 10}}, "box"),
+        ({"box": {"left": True, "top": 0, "width": 10, "height": 10}}, "box"),
+        ({"evidence": None}, "evidence"),
+    ],
+)
+def test_malformed_fields_are_rejected_not_coerced(overrides, reason):
+    fields, rejected = resolve(1, [raw(**overrides)], ROLES, [], 2.0, (612, 792))
+    assert fields == [] and reason in rejected[0].reason
+
+
+def test_candidates_are_read_only_on_requested_pages_but_every_page_is_measured():
+    first, second = extract_candidates(make_pdf([FORM, FORM]), pages=[2])
+    assert first.candidates == [] and "not requested" in first.reason
+    assert (first.width_pt, first.height_pt) == (612.0, 792.0)
+    assert len(second.candidates) == 3
+
+
+def test_a_document_pdfium_cannot_open_gives_a_reason_per_requested_page():
+    pages = extract_candidates(b"%PDF-1.7 not really", pages=[1, 2])
+    assert [p.page for p in pages] == [1, 2]
+    assert all(p.width_pt == 0 and "could not open" in p.reason for p in pages)

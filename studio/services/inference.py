@@ -48,6 +48,7 @@ PROFILE = "PROVISIONAL_DEVELOPMENT"
 MODEL_IMAGE_SHORT_SIDE = 768  # pixels: the size a high-detail page image is viewed at
 MAX_TEXT_CHARS = 8000  # page text beyond this is cut, and the cut is recorded
 MAX_OUTPUT_TOKENS = 6000
+MAX_WORKERS = 4  # concurrent page calls: also the most pages a mid-run fallback can carry
 PREFLIGHT_TEXT = "Route check. Return an empty field list and empty notes."
 PREFLIGHT_OUTPUT_TOKENS = 1000
 
@@ -229,7 +230,11 @@ class Runner:
         if result is None:
             return {"status": status}
         self._observe(result)
-        return {"status": "PASSED", "generation_id": result.generation_id}
+        return {
+            "status": "PASSED",
+            "generation_id": result.generation_id,
+            "failed_attempts": result.failed_attempts,
+        }
 
     def _call(self, evidence, stage, system, user_text, png, self_check):
         roles = self.config.roles
@@ -266,7 +271,8 @@ class Runner:
                 "observed_credential": result.observed_credential,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
-                "market_cost_usd": result.market_cost_usd,
+                "market_cost_usd": str(result.market_cost_usd),
+                "failed_attempts": result.failed_attempts,
                 "seconds": result.seconds,
             }
         )
@@ -414,8 +420,8 @@ def run(
 ) -> dict:
     if hashlib.sha256(source).hexdigest() != analysis.source_sha256:
         raise ValueError("the analysis is of a different source")
-    if config.workers < 1:
-        raise ValueError("workers must be at least 1")
+    if not 1 <= config.workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     count = len(analysis.pages)
     numbers = list(range(1, count + 1)) if config.pages is None else list(config.pages)
     if (
@@ -424,7 +430,7 @@ def run(
         or not all(1 <= n <= count for n in numbers)
     ):
         raise ValueError(f"pages must be unique and within 1..{count}, got {numbers}")
-    candidates = {page.page: page for page in extract_candidates(source)}
+    candidates = {page.page: page for page in extract_candidates(source, numbers)}
     runner = Runner(
         source, analysis, config, token=token, ledger=ledger, transport=transport, run_id=run_id
     )

@@ -161,17 +161,33 @@ def _page_candidates(number: int, page) -> PageCandidates:
     return PageCandidates(number, out, truncated, reason, **size)
 
 
-def extract_candidates(source: bytes) -> list[PageCandidates]:
-    """Candidates for every page PDFium can open; a page that fails carries its reason."""
+def _measured(number: int, page, reason: str) -> PageCandidates:
+    width, height = page.get_size()
+    size = {"width_pt": round(width, 2), "height_pt": round(height, 2)}
+    return PageCandidates(number, [], reason=reason, rotation=page.get_rotation(), **size)
+
+
+def extract_candidates(source: bytes, pages: list[int] | None = None) -> list[PageCandidates]:
+    """Every page PDFium can open is measured; candidates are read only on `pages` (default:
+    all). A page that fails carries its reason, and so does every requested page of a document
+    PDFium cannot open."""
+    wanted = None if pages is None else set(pages)
     with _LOCK:
-        pdf = pdfium.PdfDocument(source)
+        try:
+            pdf = pdfium.PdfDocument(source)
+        except Exception as error:
+            reason = f"PDFium could not open the document: {type(error).__name__}"
+            return [PageCandidates(number, [], reason=reason) for number in sorted(wanted or ())]
         try:
             results = []
             for index in range(len(pdf)):
                 try:
                     page = pdf[index]
                     try:
-                        results.append(_page_candidates(index + 1, page))
+                        if wanted is None or index + 1 in wanted:
+                            results.append(_page_candidates(index + 1, page))
+                        else:
+                            results.append(_measured(index + 1, page, "not requested"))
                     finally:
                         page.close()
                 except Exception as error:  # one page must not stop the rest

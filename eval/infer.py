@@ -89,12 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-file", type=Path, help="holds VERCEL_OIDC_TOKEN when not in env")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--pages", type=_pages, help="e.g. 1-3,7; default every page")
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=inference.MAX_WORKERS)
     args = parser.parse_args(argv)
 
     out, ledger_path = _outside_repo(args.out), _outside_repo(args.ledger)
-    if out.exists():
-        raise SystemExit(f"{out} exists; run records are never overwritten")
+    if out == ledger_path:
+        raise SystemExit("the run record and the ledger must be different files")
     route = gateway.Route(args.model, args.credential)
     config = inference.RunConfig(
         route=route,
@@ -104,31 +104,42 @@ def main(argv: list[str] | None = None) -> int:
         pages=args.pages,
     )
     token = gateway.read_token(args.env_file)
+    # The record is created before any call, so a bad --out never surfaces after spend.
+    try:
+        descriptor = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise SystemExit(f"{out} exists; run records are never overwritten") from None
+    except OSError as error:
+        raise SystemExit(f"cannot create {out}: {error.strerror}") from None
 
     stdout = sys.stdout
-    with stdout_to_stderr():
-        try:
-            source = read_source(args.source)
-            analysis = analyze(source)
-        except (AnalysisError, OSError) as error:
-            print(f"analysis failed: {error}", file=sys.stderr)
-            return 1
-        sha = hashlib.sha256(source).hexdigest()
-        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-        run_id = f"{stamp}-{sha[:8]}-{route.model.split('/')[-1]}"
-        ledger = SpendLedger(ledger_path, run_id, args.run_cap)
-        try:
-            record = inference.run(
-                source, analysis, config, token=token, ledger=ledger, run_id=run_id
-            )
-        except ValueError as error:  # refused before any call: bad pages or a mismatched source
-            print(f"not run: {error}", file=sys.stderr)
-            return 2
-        record["run_id"] = run_id
-    descriptor = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with open(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(record, handle, indent=2)
-    os.chmod(out, 0o400)
+    record: dict = {"status": "NOT_RUN", "reason": "the run ended before a record was made"}
+    try:
+        with stdout_to_stderr():
+            try:
+                source = read_source(args.source)
+                analysis = analyze(source)
+            except (AnalysisError, OSError) as error:
+                print(f"analysis failed: {error}", file=sys.stderr)
+                record = {"status": "NOT_RUN", "reason": f"analysis failed: {error}"}
+                return 1
+            sha = hashlib.sha256(source).hexdigest()
+            stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+            run_id = f"{stamp}-{sha[:8]}-{route.model.split('/')[-1]}"
+            ledger = SpendLedger(ledger_path, run_id, args.run_cap)
+            try:
+                record = inference.run(
+                    source, analysis, config, token=token, ledger=ledger, run_id=run_id
+                )
+            except ValueError as error:  # refused before any call: bad pages or workers
+                print(f"not run: {error}", file=sys.stderr)
+                record = {"status": "NOT_RUN", "reason": str(error), "run_id": run_id}
+                return 2
+            record["run_id"] = run_id
+    finally:
+        with open(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        os.chmod(out, 0o400)
     json.dump({"run_id": run_id, **_summary(record)}, stdout, indent=2)
     stdout.write("\n")
     return 0 if record["status"] == "COMPLETE" else 1

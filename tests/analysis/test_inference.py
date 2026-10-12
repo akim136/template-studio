@@ -338,3 +338,40 @@ def test_a_run_needs_at_least_one_worker(tmp_path):
     with pytest.raises(ValueError, match="workers"):
         run(tmp_path, fake, config=dataclasses.replace(CONFIG, workers=0))
     assert fake.requests == []
+
+
+def test_a_run_has_at_most_the_approved_number_of_workers(tmp_path):
+    fake = FakeGateway()
+    workers = inference.MAX_WORKERS + 1
+    with pytest.raises(ValueError, match="workers"):
+        run(tmp_path, fake, config=dataclasses.replace(CONFIG, workers=workers))
+    assert fake.requests == []
+
+
+def cli(tmp_path, monkeypatch, *extra, out=None, ledger=None):
+    import eval.infer
+
+    fake = FakeGateway()
+    monkeypatch.setattr(gateway, "urllib_transport", fake)
+    monkeypatch.setenv("VERCEL_OIDC_TOKEN", "synthetic-token")
+    source = tmp_path / "source.pdf"
+    source.write_bytes(make_source())
+    out = out or tmp_path / "run.json"
+    args = [str(source), "--model", "openai/gpt-4.1", "--credential", "byok"]
+    args += ["--roles", "Client,CounterSigner", "--signer-mode", "synthetic", "--run-cap", "1"]
+    args += ["--ledger", str(ledger or tmp_path / "ledger.jsonl"), "--out", str(out), *extra]
+    return eval.infer.main(args), fake, out
+
+
+def test_the_cli_refuses_an_output_that_is_the_ledger_before_any_call(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="ledger"):
+        cli(tmp_path, monkeypatch, out=tmp_path / "same.jsonl", ledger=tmp_path / "same.jsonl")
+
+
+def test_the_cli_reserves_the_record_before_any_call(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="cannot create"):
+        cli(tmp_path, monkeypatch, out=tmp_path / "missing" / "run.json")
+    code, fake, out = cli(tmp_path, monkeypatch, "--pages", "7")
+    assert code == 2 and fake.requests == []
+    assert json.loads(out.read_text())["status"] == "NOT_RUN"
+    assert out.stat().st_mode & 0o777 == 0o400

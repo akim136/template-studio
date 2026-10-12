@@ -33,7 +33,7 @@ class BudgetExceeded(Exception):
 @dataclass(frozen=True)
 class Reservation:
     id: str
-    usd: float
+    usd: Decimal | float
     label: str
 
 
@@ -92,7 +92,7 @@ class SpendLedger:
                         )
                 if write is None:
                     return total, run_total
-                handle.write(json.dumps(write) + "\n")
+                handle.write(json.dumps(write, default=str) + "\n")  # Decimal as text
                 handle.flush()
                 return _totals([*rows, write], self.run)
             finally:
@@ -102,13 +102,13 @@ class SpendLedger:
         total, run_total = self._locked()
         return float(total), float(run_total)
 
-    def reserve(self, usd: float, label: str) -> Reservation:
+    def reserve(self, usd, label: str) -> Reservation:
         reservation = Reservation(uuid.uuid4().hex, usd, label)
         row = {"kind": "reserve", "id": reservation.id, "run": self.run, "label": label}
         self._locked({**row, "usd": usd, "at": _now()}, check_usd=_usd(usd))
         return reservation
 
-    def settle(self, reservation: Reservation, usd: float, detail: dict) -> None:
+    def settle(self, reservation: Reservation, usd, detail: dict) -> None:
         """Record the observed cost, always. Then raise BudgetExceeded if it was above the
         reservation or the totals are now above a cap, so no further call is made."""
         row = {"kind": "settle", "id": reservation.id, "run": self.run, "label": reservation.label}
