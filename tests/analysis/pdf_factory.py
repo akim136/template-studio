@@ -9,8 +9,12 @@ def _escape(text: str) -> bytes:
     )
 
 
-def make_pdf(texts: list[str], *, size=(612, 792), bad_startxref: bool = False) -> bytes:
-    """One page per entry, each showing its text in Helvetica. An empty entry is a blank page.
+DRAWN_BOX = b"0 0 0 rg 72 600 200 40 re f"  # a filled rectangle and no text
+
+
+def make_pdf(texts: list[str | bytes], *, size=(612, 792), bad_startxref: bool = False) -> bytes:
+    """One page per entry, each showing its text in Helvetica. An empty entry is a blank page,
+    and a bytes entry is used as the page's raw content stream.
 
     ``bad_startxref`` points the trailer at the wrong offset, so the parser recovers with
     diagnostics instead of reading cleanly.
@@ -23,7 +27,10 @@ def make_pdf(texts: list[str], *, size=(612, 792), bad_startxref: bool = False) 
         3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     }
     for page, text in zip(page_ids, texts, strict=True):
-        stream = b"BT /F1 12 Tf 72 720 Td (%s) Tj ET" % _escape(text) if text else b""
+        if isinstance(text, bytes):  # a raw content stream, for pages drawn without text
+            stream = text
+        else:
+            stream = b"BT /F1 12 Tf 72 720 Td (%s) Tj ET" % _escape(text) if text else b""
         objects[page] = (
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] "
             b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % (*size, page + 1)

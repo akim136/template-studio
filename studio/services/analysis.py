@@ -1,8 +1,8 @@
 """The one analysis service. The app and the evaluation wrapper both call ``analyze``.
 
-This slice covers generic extraction and a full page inventory over the source bytes. Field
-drafting (stage A) and self-check (stage B) need an authorized model route, so they report
-NOT_RUN. Page images need a rasterizer that has not been adopted, so they report NOT_RUN too.
+This slice covers generic extraction and a full page inventory over the source bytes: the text
+layer and geometry from pypdf, and a rendered image of every page from PDFium. Field drafting
+(stage A) and self-check (stage B) report NOT_RUN until the model route is wired in.
 
 The service takes bytes and returns a record. It opens no files and makes no network calls.
 """
@@ -15,14 +15,17 @@ import logging
 import re
 import threading
 from contextlib import contextmanager, suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from pypdf import PdfReader
 from pypdf.errors import DependencyError, FileNotDecryptedError, PyPdfError
 
-INFERENCE_NOT_RUN = "NOT_RUN: model inference is not authorized"
-IMAGES_NOT_RUN = "NOT_RUN: no page rasterizer has been adopted"
-NO_TEXT_REASON = "no extractable text; page images are NOT_RUN"
+from studio.services.render import RENDERER, PageImage, inventory_images
+
+INFERENCE_NOT_RUN = "NOT_RUN: model inference is not wired in yet"
+NO_TEXT_REASON = "no extractable text layer"
+# Uploads are usually about 10 MB; 50 MB is the agreed ceiling.
+MAX_SOURCE_BYTES = 50 * 1024 * 1024
 # A mechanics signal only. An underscore run is not a templated field.
 UNDERSCORE_RUN = re.compile(r"_{3,}")
 
@@ -56,6 +59,17 @@ class PageRecord:
     text: str
     underscore_runs: int
     reason: str | None = None
+    image: PageImage | None = None
+    image_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PageFlag:
+    """A page the user must look at. A blocking flag keeps the inventory INCOMPLETE."""
+
+    page: int
+    reason: str
+    blocks_complete: bool
 
 
 @dataclass(frozen=True)
@@ -64,10 +78,13 @@ class AnalysisResult:
     source_bytes: int
     page_count: int
     declared_page_count: int | None  # the page tree's /Count, checked against pages found
-    inventory: str  # "COMPLETE" only when every page has a record and none failed
+    renderer_page_count: int | None  # PDFium's count, checked against pages found
+    # COMPLETE only when every page was found, read and rendered, with no blocking flag.
+    inventory: str
     pages: list[PageRecord]
+    flags: list[PageFlag]
     diagnostics: list[str]
-    page_images: str = IMAGES_NOT_RUN
+    renderer: str = RENDERER
     stage_a_first_draft: str = INFERENCE_NOT_RUN
     stage_b_self_check: str = INFERENCE_NOT_RUN
 
@@ -144,8 +161,43 @@ def _read(source: bytes) -> tuple[list[PageRecord], int | None]:
     return pages, _declared_count(reader)
 
 
+def _with_images(source: bytes, pages: list[PageRecord]) -> tuple[list[PageRecord], int | None]:
+    try:
+        count, rendered = inventory_images(source)
+    except Exception as error:  # PDFium could not open the document at all
+        reason = f"PDFium could not open the document: {type(error).__name__}: {error}"
+        return [replace(page, image_reason=reason) for page in pages], None
+    out = []
+    for page in pages:
+        if page.page > count:
+            out.append(replace(page, image_reason=f"PDFium found only {count} page(s)"))
+        elif isinstance(rendered[page.page - 1], PageImage):
+            out.append(replace(page, image=rendered[page.page - 1]))
+        else:
+            out.append(replace(page, image_reason=rendered[page.page - 1]))
+    return out, count
+
+
+def _flags(pages: list[PageRecord]) -> list[PageFlag]:
+    flags = []
+    for page in pages:
+        if page.status == "error":
+            flags.append(PageFlag(page.page, f"text extraction failed: {page.reason}", True))
+        if page.image is None:
+            flags.append(PageFlag(page.page, f"page image not rendered: {page.image_reason}", True))
+        elif page.image.blank:
+            flags.append(PageFlag(page.page, "the page renders blank", False))
+        elif page.status == "no_text":
+            reason = "no text layer; the page needs visual inspection"
+            flags.append(PageFlag(page.page, reason, False))
+    return flags
+
+
 def analyze(source: bytes) -> AnalysisResult:
     """Inventory every page of a PDF given as bytes."""
+    if len(source) > MAX_SOURCE_BYTES:
+        message = f"the source is {len(source)} bytes; the limit is {MAX_SOURCE_BYTES} (50 MB)"
+        raise AnalysisError(message, source, [])
     with _parser_diagnostics() as diagnostics:
         try:
             pages, declared = _read(source)
@@ -157,20 +209,27 @@ def analyze(source: bytes) -> AnalysisResult:
         except Exception as error:  # any parser failure is a FAILED record, never a traceback
             message = f"unreadable PDF: {type(error).__name__}: {error}"
             raise AnalysisError(message, source, diagnostics) from error
+    pages, rendered = _with_images(source, pages)
 
     findings = list(diagnostics)
     if declared != len(pages):
         findings.append(f"page tree declares {declared} page(s) but {len(pages)} were found")
-    failed = [record.page for record in pages if record.status == "error"]
-    if failed:
-        findings.append(f"page(s) {failed} failed extraction")
-    complete = bool(pages) and declared == len(pages) and not failed
+    if rendered != len(pages):
+        findings.append(f"PDFium found {rendered} page(s) but {len(pages)} were found")
+    flags = _flags(pages)
+    complete = (
+        bool(pages)
+        and declared == len(pages) == rendered
+        and not any(flag.blocks_complete for flag in flags)
+    )
     return AnalysisResult(
         source_sha256=hashlib.sha256(source).hexdigest(),
         source_bytes=len(source),
         page_count=len(pages),
         declared_page_count=declared,
+        renderer_page_count=rendered,
         inventory="COMPLETE" if complete else "INCOMPLETE",
         pages=pages,
+        flags=flags,
         diagnostics=findings,
     )
