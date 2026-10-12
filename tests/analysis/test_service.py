@@ -3,7 +3,7 @@ import hashlib
 import io
 import os
 import pathlib
-import zlib
+from dataclasses import replace
 
 import pytest
 from pypdf import PageObject
@@ -17,7 +17,7 @@ from studio.services.analysis import (
     PageFlag,
     analyze,
 )
-from studio.services.render import PageImage, render_png
+from studio.services.render import PageImage
 from tests.analysis.pdf_factory import DRAWN_BOX, encrypt, make_pdf
 
 
@@ -49,7 +49,14 @@ def test_a_page_missing_from_the_page_tree_makes_the_inventory_incomplete():
     result = analyze(source)
     assert (result.page_count, result.declared_page_count) == (3, 5)
     assert result.inventory == "INCOMPLETE"
-    assert "page tree declares 5 page(s) but 3 were found" in result.diagnostics
+    assert PageFlag(None, "the page tree declares 5 page(s) but 3 were found", True) in result.flags
+
+
+def test_a_page_tree_without_a_count_is_flagged_in_words():
+    result = analyze(make_pdf(["a"]).replace(b" /Count 1", b""))
+    assert result.declared_page_count is None
+    assert PageFlag(None, "the page tree does not declare a page count", True) in result.flags
+    assert not any("None" in flag.reason for flag in result.flags)
 
 
 def test_a_failed_page_is_recorded_not_dropped(monkeypatch):
@@ -109,8 +116,11 @@ def test_an_encrypted_pdf_is_inventoried_from_its_page_tree(real, declared):
     assert result.inventory == "INCOMPLETE"
 
 
-def test_an_encrypted_pdf_with_an_empty_user_password_is_inventoried():
-    result = analyze(encrypt(make_pdf(["one", "two"])))
+@pytest.mark.parametrize("algorithm", ["RC4-128", "AES-128", "AES-256"])
+def test_an_encrypted_pdf_with_an_empty_user_password_is_read_and_rendered(algorithm):
+    result = analyze(encrypt(make_pdf(["one", "two"]), algorithm))
+    assert [p.text for p in result.pages] == ["one", "two"]
+    assert [p.image.blank for p in result.pages] == [False, False]
     assert (result.page_count, result.inventory) == (2, "COMPLETE")
 
 
@@ -181,20 +191,67 @@ def test_a_document_pdfium_cannot_open_flags_every_page(monkeypatch):
 
 
 def test_a_source_over_the_size_limit_is_rejected_before_parsing(monkeypatch):
-    monkeypatch.setattr(analysis_module, "MAX_SOURCE_BYTES", 100)
-    with pytest.raises(AnalysisError, match="the limit is 100"):
-        analyze(make_pdf(["too big"]))
-    assert analysis_module.MAX_SOURCE_BYTES == 100
-    monkeypatch.undo()
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("parsed or rendered a source over the limit")
+
+    monkeypatch.setattr(analysis_module, "PdfReader", must_not_run)
+    monkeypatch.setattr(analysis_module, "inventory_images", must_not_run)
+    source = make_pdf(["too big"])
+    monkeypatch.setattr(analysis_module, "MAX_SOURCE_BYTES", len(source) - 1)
+    with pytest.raises(AnalysisError, match=f"the limit is {len(source) - 1} bytes") as caught:
+        analyze(source)
+    assert caught.value.to_dict()["source_sha256"] == hashlib.sha256(source).hexdigest()
+
+
+def test_a_source_exactly_at_the_size_limit_is_analyzed(monkeypatch):
+    source = make_pdf(["just fits"])
+    monkeypatch.setattr(analysis_module, "MAX_SOURCE_BYTES", len(source))
+    assert analyze(source).inventory == "COMPLETE"
+
+
+def test_the_size_limit_is_50_mib_and_the_message_says_so():
     assert analysis_module.MAX_SOURCE_BYTES == 50 * 1024 * 1024
+    with pytest.raises(AnalysisError, match=r"\(50 MiB\)"):
+        analyze(b"0" * (analysis_module.MAX_SOURCE_BYTES + 1))
 
 
-def test_render_png_returns_a_valid_png_of_the_page():
-    png = render_png(make_pdf(["x"]), 1, scale=2.0)
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    width, height = int.from_bytes(png[16:20]), int.from_bytes(png[20:24])
-    assert (width, height) == (1224, 1584)
-    idat_length = int.from_bytes(png[33:37])
-    assert png[37:41] == b"IDAT"
-    raw = zlib.decompress(png[41 : 41 + idat_length])
-    assert len(raw) == height * (1 + width * 3)
+def test_pages_pdfium_did_not_find_are_flagged(monkeypatch):
+    real = analysis_module.inventory_images
+
+    def finds_one(source):
+        count, images = real(source)
+        return 1, images[:1]
+
+    monkeypatch.setattr(analysis_module, "inventory_images", finds_one)
+    result = analyze(make_pdf(["one", "two"]))
+    assert PageFlag(2, "page image not rendered: PDFium found only 1 page(s)", True) in result.flags
+    assert PageFlag(None, "PDFium found 1 page(s) but the page tree has 2", True) in result.flags
+    assert result.inventory == "INCOMPLETE"
+
+
+def test_extra_pages_pdfium_found_are_flagged_not_dropped(monkeypatch):
+    real = analysis_module.inventory_images
+
+    def finds_three(source):
+        count, images = real(source)
+        return 3, images + images[:1]
+
+    monkeypatch.setattr(analysis_module, "inventory_images", finds_three)
+    result = analyze(make_pdf(["one", "two"]))
+    assert result.flags == [PageFlag(None, "PDFium found 3 page(s) but the page tree has 2", True)]
+    assert result.inventory == "INCOMPLETE"
+
+
+def test_a_blank_render_of_a_page_with_text_blocks_complete(monkeypatch):
+    """PDFium does not report content it cannot draw; a blank page that has text is suspect."""
+    real = analysis_module.inventory_images
+
+    def first_page_blank(source):
+        count, images = real(source)
+        return count, [replace(images[0], blank=True), *images[1:]]
+
+    monkeypatch.setattr(analysis_module, "inventory_images", first_page_blank)
+    result = analyze(make_pdf(["has text", "also text"]))
+    reason = "the page renders blank although it has a text layer"
+    assert result.flags == [PageFlag(1, reason, True)]
+    assert result.inventory == "INCOMPLETE"

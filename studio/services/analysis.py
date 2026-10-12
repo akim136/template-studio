@@ -4,7 +4,9 @@ This slice covers generic extraction and a full page inventory over the source b
 layer and geometry from pypdf, and a rendered image of every page from PDFium. Field drafting
 (stage A) and self-check (stage B) report NOT_RUN until the model route is wired in.
 
-The service takes bytes and returns a record. It opens no files and makes no network calls.
+The service takes bytes and returns a record. It opens no files from Python and makes no network
+calls. PDFium is native code and may read system font files to draw fonts a PDF does not embed;
+fonts carry no answers, so this does not weaken generator isolation.
 """
 
 from __future__ import annotations
@@ -24,8 +26,7 @@ from studio.services.render import RENDERER, PageImage, inventory_images
 
 INFERENCE_NOT_RUN = "NOT_RUN: model inference is not wired in yet"
 NO_TEXT_REASON = "no extractable text layer"
-# Uploads are usually about 10 MB; 50 MB is the agreed ceiling.
-MAX_SOURCE_BYTES = 50 * 1024 * 1024
+MAX_SOURCE_BYTES = 50 * 1024 * 1024  # the agreed ceiling (guide §10)
 # A mechanics signal only. An underscore run is not a templated field.
 UNDERSCORE_RUN = re.compile(r"_{3,}")
 
@@ -65,9 +66,9 @@ class PageRecord:
 
 @dataclass(frozen=True)
 class PageFlag:
-    """A page the user must look at. A blocking flag keeps the inventory INCOMPLETE."""
+    """Something the user must look at. A blocking flag keeps the inventory INCOMPLETE."""
 
-    page: int
+    page: int | None  # None: the whole document
     reason: str
     blocks_complete: bool
 
@@ -185,6 +186,10 @@ def _flags(pages: list[PageRecord]) -> list[PageFlag]:
             flags.append(PageFlag(page.page, f"text extraction failed: {page.reason}", True))
         if page.image is None:
             flags.append(PageFlag(page.page, f"page image not rendered: {page.image_reason}", True))
+        elif page.image.blank and page.status == "text":
+            # PDFium reports no error for content it cannot draw, so this image is not evidence.
+            reason = "the page renders blank although it has a text layer"
+            flags.append(PageFlag(page.page, reason, True))
         elif page.image.blank:
             flags.append(PageFlag(page.page, "the page renders blank", False))
         elif page.status == "no_text":
@@ -193,10 +198,26 @@ def _flags(pages: list[PageRecord]) -> list[PageFlag]:
     return flags
 
 
+def _document_flags(found: int, declared: int | None, rendered: int | None) -> list[PageFlag]:
+    flags = []
+    if not found:
+        flags.append(PageFlag(None, "the document has no pages", True))
+    if declared is None:
+        flags.append(PageFlag(None, "the page tree does not declare a page count", True))
+    elif declared != found:
+        reason = f"the page tree declares {declared} page(s) but {found} were found"
+        flags.append(PageFlag(None, reason, True))
+    if rendered is not None and rendered != found:  # None: every page already carries a flag
+        reason = f"PDFium found {rendered} page(s) but the page tree has {found}"
+        flags.append(PageFlag(None, reason, True))
+    return flags
+
+
 def analyze(source: bytes) -> AnalysisResult:
     """Inventory every page of a PDF given as bytes."""
     if len(source) > MAX_SOURCE_BYTES:
-        message = f"the source is {len(source)} bytes; the limit is {MAX_SOURCE_BYTES} (50 MB)"
+        limit = f"{MAX_SOURCE_BYTES} bytes ({MAX_SOURCE_BYTES / 2**20:g} MiB)"
+        message = f"the source is {len(source)} bytes; the limit is {limit}"
         raise AnalysisError(message, source, [])
     with _parser_diagnostics() as diagnostics:
         try:
@@ -204,24 +225,15 @@ def analyze(source: bytes) -> AnalysisResult:
         except FileNotDecryptedError as error:
             raise AnalysisError("the PDF needs a password", source, diagnostics) from error
         except DependencyError as error:
-            message = f"unsupported encryption, needs a dependency not adopted: {error}"
+            message = f"unsupported encryption: {error}"
             raise AnalysisError(message, source, diagnostics) from error
         except Exception as error:  # any parser failure is a FAILED record, never a traceback
             message = f"unreadable PDF: {type(error).__name__}: {error}"
             raise AnalysisError(message, source, diagnostics) from error
     pages, rendered = _with_images(source, pages)
 
-    findings = list(diagnostics)
-    if declared != len(pages):
-        findings.append(f"page tree declares {declared} page(s) but {len(pages)} were found")
-    if rendered != len(pages):
-        findings.append(f"PDFium found {rendered} page(s) but {len(pages)} were found")
-    flags = _flags(pages)
-    complete = (
-        bool(pages)
-        and declared == len(pages) == rendered
-        and not any(flag.blocks_complete for flag in flags)
-    )
+    flags = _document_flags(len(pages), declared, rendered) + _flags(pages)
+    complete = not any(flag.blocks_complete for flag in flags)
     return AnalysisResult(
         source_sha256=hashlib.sha256(source).hexdigest(),
         source_bytes=len(source),
@@ -231,5 +243,5 @@ def analyze(source: bytes) -> AnalysisResult:
         inventory="COMPLETE" if complete else "INCOMPLETE",
         pages=pages,
         flags=flags,
-        diagnostics=findings,
+        diagnostics=list(diagnostics),
     )

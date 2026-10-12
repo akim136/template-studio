@@ -1,7 +1,8 @@
 """Page rendering through PDFium (pypdfium2).
 
-PDFium is not thread-safe, so every call holds one module lock. Pages are rendered one at a time
-and released, so a large document is never rasterized all at once.
+PDFium is not thread-safe, so every call holds one module lock, and every document, page and
+bitmap is closed before the lock is released. Pages are rendered one at a time, and each render is
+bounded in pixels, because a tiny file can declare an enormous page.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import pypdfium2 as pdfium
 
 RENDERER = f"pdfium {pdfium.PDFIUM_INFO}"
 INVENTORY_SCALE = 1.0  # 72 DPI grayscale: enough to prove the page renders and is not blank
+INVENTORY_MAX_SIDE = 1600  # larger pages are inventoried at a lower scale, recorded per page
+MAX_RENDER_PIXELS = 16_000_000  # a model image above this is refused, not rendered
 _LOCK = threading.Lock()
 
 
@@ -23,14 +26,21 @@ _LOCK = threading.Lock()
 class PageImage:
     width_px: int
     height_px: int
+    scale: float  # pixels per point
     sha256: str  # of the raw pixel rows, for this renderer and scale
     blank: bool
 
 
-def _rows(bitmap) -> list[bytes]:
-    """Pixel rows without the stride padding PDFium may add."""
-    buffer, width = bytes(bitmap.buffer), bitmap.width * bitmap.n_channels
-    return [buffer[y * bitmap.stride : y * bitmap.stride + width] for y in range(bitmap.height)]
+def _render(page, scale: float, **options) -> tuple[list[bytes], int, int, int]:
+    """Render one page and copy out its pixel rows (without stride padding), width, height and
+    channel count. The bitmap is closed here, while the caller still holds the lock."""
+    bitmap = page.render(scale=scale, **options)
+    try:
+        buffer, width = bytes(bitmap.buffer), bitmap.width * bitmap.n_channels
+        rows = [buffer[y * bitmap.stride : y * bitmap.stride + width] for y in range(bitmap.height)]
+        return rows, bitmap.width, bitmap.height, bitmap.n_channels
+    finally:
+        bitmap.close()
 
 
 def inventory_images(source: bytes) -> tuple[int, list[PageImage | str]]:
@@ -44,8 +54,8 @@ def inventory_images(source: bytes) -> tuple[int, list[PageImage | str]]:
                 try:
                     page = pdf[index]
                     try:
-                        bitmap = page.render(scale=INVENTORY_SCALE, grayscale=True)
-                        rows = _rows(bitmap)
+                        scale = min(INVENTORY_SCALE, INVENTORY_MAX_SIDE / max(page.get_size()))
+                        rows, width, height, _ = _render(page, scale, grayscale=True)
                     finally:
                         page.close()
                 except Exception as error:  # one page must not stop the rest
@@ -54,8 +64,9 @@ def inventory_images(source: bytes) -> tuple[int, list[PageImage | str]]:
                 pixels = b"".join(rows)
                 results.append(
                     PageImage(
-                        width_px=bitmap.width,
-                        height_px=bitmap.height,
+                        width_px=width,
+                        height_px=height,
+                        scale=scale,
                         sha256=hashlib.sha256(pixels).hexdigest(),
                         blank=not pixels.strip(b"\xff"),
                     )
@@ -72,20 +83,27 @@ def _chunk(tag: bytes, data: bytes) -> bytes:
 
 def render_png(source: bytes, page_number: int, scale: float) -> bytes:
     """One page (one-based) as an RGB PNG, for submission to a model."""
+    if not scale > 0:
+        raise ValueError(f"scale must be positive, got {scale}")
     with _LOCK:
         pdf = pdfium.PdfDocument(source)
         try:
             page = pdf[page_number - 1]
             try:
-                bitmap = page.render(scale=scale, rev_byteorder=True)
-                rows = _rows(bitmap)
+                width_pt, height_pt = page.get_size()
+                if width_pt * height_pt * scale * scale > MAX_RENDER_PIXELS:
+                    raise ValueError(
+                        f"page {page_number} at scale {scale} exceeds the pixel budget "
+                        f"of {MAX_RENDER_PIXELS}"
+                    )
+                rows, width, height, channels = _render(page, scale, rev_byteorder=True)
             finally:
                 page.close()
         finally:
             pdf.close()
-    if bitmap.n_channels != 3:
-        raise ValueError(f"expected an RGB bitmap, got {bitmap.n_channels} channel(s)")
-    header = struct.pack(">IIBBBBB", bitmap.width, bitmap.height, 8, 2, 0, 0, 0)
+    if channels != 3:
+        raise ValueError(f"expected an RGB bitmap, got {channels} channel(s)")
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     pixels = zlib.compress(b"".join(b"\x00" + row for row in rows), 6)
     return (
         b"\x89PNG\r\n\x1a\n"

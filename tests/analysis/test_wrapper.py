@@ -52,6 +52,32 @@ def test_library_output_on_stdout_cannot_break_the_json(tmp_path, monkeypatch, c
     assert "parser chatter on stdout" in err
 
 
+def test_native_writes_to_file_descriptor_1_cannot_break_the_json(tmp_path):
+    """PDFium is native code: a write straight to fd 1 during analysis must land on stderr."""
+    source = tmp_path / "source.pdf"
+    source.write_bytes(make_pdf(["native"]))
+    driver = (
+        "import os, sys\n"
+        "import eval.analyze as wrapper\n"
+        "from studio.services import analysis\n"
+        "def native(data):\n"
+        "    os.write(1, b'native chatter on fd 1\\n')\n"
+        "    return analysis.analyze(data)\n"
+        "wrapper.analyze = native\n"
+        "sys.exit(wrapper.main(sys.argv[1:]))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", driver, str(source)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["page_count"] == 1
+    assert "native chatter on fd 1" in proc.stderr
+
+
 def test_failures_are_still_json_with_a_nonzero_exit(tmp_path):
     not_pdf = tmp_path / "notes.pdf"
     not_pdf.write_text("plain text")
@@ -114,13 +140,14 @@ def test_the_wrapper_has_no_parser_of_its_own():
                 [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module]
             )
         }
-        assert not any(name and name.split(".")[0] == "pypdf" for name in imported), path
+        roots = {name.split(".")[0] for name in imported if name}
+        assert not roots & {"pypdf", "pypdfium2"}, path
 
 
 def test_an_unsupported_dependency_is_failed_json_that_names_the_source(
     tmp_path, monkeypatch, capsys
 ):
-    """An AES-256 source needs a crypto package that has not been adopted."""
+    """A crypto dependency failure is a FAILED record, not a traceback."""
     source = tmp_path / "source.pdf"
     source.write_bytes(make_pdf(["locked"]))
 

@@ -27,7 +27,7 @@ def make_pdf(texts: list[str | bytes], *, size=(612, 792), bad_startxref: bool =
         3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     }
     for page, text in zip(page_ids, texts, strict=True):
-        if isinstance(text, bytes):  # a raw content stream, for pages drawn without text
+        if isinstance(text, bytes):
             stream = text
         else:
             stream = b"BT /F1 12 Tf 72 720 Td (%s) Tj ET" % _escape(text) if text else b""
