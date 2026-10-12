@@ -35,8 +35,9 @@ uv run --locked python -m eval.analyze SOURCE.pdf > /path/outside/the/repo/run.j
 
 The wrapper calls `studio.services.analysis.analyze`, the same service the app will use. Stdout is
 one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`), per-page
-text, geometry and rendered-image evidence, and page flags. Sources over 50 MB are rejected. Parser
-diagnostics go to stderr. Run records contain source text, so keep them outside the repository.
+text, geometry and rendered-image evidence, and flags (per page, or `page: null` for the whole
+document). Sources over 50 MiB are rejected. Parser diagnostics go to stderr. Run records contain
+source text, so keep them outside the repository.
 
 ## Checks
 
