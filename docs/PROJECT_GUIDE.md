@@ -1,10 +1,10 @@
 # Homebase Template Studio: project guide
 
-**Revision 1.0.14-repo.3 · October 11, 2026 · Owner: Alex Kim**
-**Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. This revision is the `scope_update` that advances the active phase to P1 when Alex merges it.
-- Analysis is NOT_IMPLEMENTED.
+**Revision 1.0.14-repo.6 · October 12, 2026 · Owner: Alex Kim**
+**Status:** P0 is complete. The foundation merged through PR #1 and a contract fix through PR #2, both after green checks. PR #3 is the `scope_update` that advances the active phase to P1. This revision is PR2's draft analysis spike, a P1 feature stacked on it.
+- Analysis is NOT_IMPLEMENTED in the app. PR2 (draft) adds the shared analysis service: text, geometry, page images and a full page inventory. Field drafting and self-check are NOT_RUN; the model route is next.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
-- There is no inference and no spend.
+- Inference is authorized through Vercel AI Gateway with a $10 cap. Spend so far: $0.0027, on a text-only gateway smoke test and model-access probes. No document content has been sent.
 
 This is the canonical guide for this repository. It condenses the private kickoff (guide 1.0.14, PR plan, implementation acceptance, quality and model gate, access runbook) into public-safe requirements.
 
@@ -41,8 +41,8 @@ Precedence, highest first:
 | Isolation | Independent of earlier Template Studio checkouts and another parallel session. Nothing was copied from them or changed in them. |
 | Branches | `main` holds the bootstrap commit, and `chore/studio-foundation` holds PR1. |
 | Local preview | `127.0.0.1:8773`. The preferred ports 8771 and 8772 were held by other sessions. |
-| Budget | Elapsed and remaining assessment time is UNKNOWN until Alex records it. Inference spend is $0, and none is authorized. |
-| Private inputs | Not supplied to this workspace. Hashing and page inventory are NOT RUN. This is a PR2 precondition. |
+| Budget | Elapsed and remaining assessment time is UNKNOWN until Alex records it. Inference is capped at $10 (authorized October 11, 2026); spend is in section 9. |
+| Private inputs | Hash-verified copies of `dev-a` and `dev-b` are read in place, outside every repository, and never copied in. Run records stay in a private directory outside the repository. Baseline answers stay unopened. |
 
 ## 3. Seven PR-sized stages
 
@@ -116,6 +116,7 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
 
   Missing pages, truncated output or invalid output never count as a complete analysis.
 - **Diagnostics stay out of JSON.** Parser diagnostics go to stderr, and JSON output stays parseable. A regression test is required. One development case printed parser diagnostics on stdout and broke its JSON output.
+  - PR2: while it analyzes, the wrapper points both Python's stdout and file descriptor 1 at stderr, because PDFium is native code. Regression tests cover a Python print and a direct write to file descriptor 1.
 - **Underscores are not templates.** Underscore-run extraction is a mechanics capability, not complete templatization. Drawn rules, checkboxes and label-only fields are capabilities to measure, not to drop silently.
 - **No substitutes.** Sample or fixture fields never stand in for real analysis.
 - **Generator isolation.** The generating model's requests and tools receive only the source PDF, approved business rules and scoped tools. They must never reach:
@@ -126,6 +127,7 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
   - evaluator reports.
 
   Separate folders, `.gitignore` or `chmod` do not establish isolation. PR2 needs a test showing that evaluator material cannot be retrieved.
+  - PR2 so far: tests show the service opens no files and the wrapper opens only the source, not decoy evaluator files beside it. Generator request isolation is NOT_RUN, because there is no model client yet.
 - **Development cases.**
   - `dev-a` (97 pages) and `dev-b` (64 pages) are private, *exposed* development cases, not holdouts.
   - Their references are UNREVIEWED.
@@ -214,21 +216,23 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 
 | Field | Value |
 |---|---|
-| Phase | P1 once this `scope_update` merges. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
-| Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
-| Analysis | NOT_IMPLEMENTED |
+| Phase | P1, set by the `scope_update` in PR #3. P0 ended with PR #1 (foundation) and PR #2 (contract fix), both merged with merge commits after green checks. |
+| Reviews | PR1: `/codex-review` approve with 3 medium findings; reviewer subagent 8 FIX and 4 ESCALATE. PR2 (PR #4): `/codex-review` approved each round; round 3 raised a render-budget finding (fixed) and an unused-helper note (kept for the model route); round 4 raised an unbounded wrapper read (fixed) and missing text, page and time budgets (open, section 10). Reviewer subagent round 2: 11 FIX, all fixed with tests; 2 ESCALATE, resolved under Alex's rule that anything incomplete is flagged (section 10). Alex is the approver. |
+| Analysis | The app: NOT_IMPLEMENTED. PR2 (draft): `studio.services.analysis` reads the text layer and geometry of every leaf of the page tree (pypdf), renders every page (PDFium), and checks both counts against `/Count`. `COMPLETE` requires every page to be found, read and rendered. Everything the user must look at is flagged. Blocking flags keep the inventory INCOMPLETE: extraction or render failures, a blank render of a page that has a text layer, and document-level gaps (`page: null`) such as a count mismatch or a missing `/Count`. Blank or text-less pages get a non-blocking flag. Every render is bounded in pixels and every PDFium object is closed under its lock. Sources over 50 MiB are rejected before parsing, and the wrapper opens only regular files and never holds an oversize file in memory. Parser failures become `FAILED` records that keep the source hash. Stages A and B are NOT_RUN until the model route is wired in. Generator request isolation is NOT_RUN. The comparator checker and its 26 controls are not adopted yet (NOT RUN). |
 | Vercel access | Protection applied to all deployments. Alex's signed-in check passed. Named invitations NOT_APPLIED (section 6). |
 | Hosted CI | Passed on PR #1, PR #2 and each push to `main`, generic rules only. |
-| Private inputs | NOT RUN, because they were not supplied. |
-| Inference | None. $0. |
-| Next | PR2 `spike/studio-analysis`, a P1 feature PR declaring `F-P1-analysis`. Extraction and page inventory need no inference. Classification and self-check wait for an authorized model route and spend cap. |
+| Private inputs | Mechanics-only runs, no inference. EXECUTED October 11, 2026 on `ea57ac6` plus the uncommitted rendering changes, and again October 12, 2026 on commit `bb63e5c`: `dev-a` 97 pages, `dev-b` 64 pages; both hashes match the intake record; both inventories COMPLETE. `dev-a` page 92 renders blank and has no text layer (non-blocking flag). `dev-a` has 19 parser diagnostics, all on stderr with valid JSON on stdout, which is the real-document check of the stdout regression. |
+| Inference | No document content sent. $0.0027 spent on a text-only smoke test and access probes (EXECUTED October 12, 2026; ledger outside the repository). Observed: of 9 OpenAI models probed, Alex's key reaches only `gpt-6-astra` and `gpt-4.1`. For the others the gateway retries on Vercel's system credentials, so the model route must record the credential each call used. |
+| Next | The model route: Vercel AI Gateway restricted to OpenAI (Alex's key), a $10 cap enforced in code, stages A and B, and a generator-isolation test on the actual model request. Then the first unmodified run on `dev-a` and `dev-b`. |
 
 ## 10. Open decisions
 
 - The assessment time budget, both elapsed and remaining.
-- The private-PDF location for this workspace, and evaluator-only storage for the baseline.
-- The PDF library and its license (for example, AGPL versus commercial) before parser adoption, plus a native-dependency smoke test on the deployment runtime.
-- The model route, provider restriction and spend cap. Reference adjudication and tolerances.
+- Evaluator-only storage for the baseline. (Decided: the private PDFs are read in place, and more sources are expected in R2.)
+- Decided October 11, 2026: pypdf 6.20.0 for text and geometry, pypdfium2 5.14.0 (PDFium) for page images, and `cryptography` 50.0.2 for AES, all BSD or Apache licensed. OSV reported no known vulnerabilities in any of the 29 locked packages on that date. Still open: a native-dependency smoke test on the Vercel runtime (hosted CI already renders on Linux x86_64).
+- Source budgets: decided at 50 MiB, enforced in the service (uploads are usually about 10 MB). Renders are bounded in pixels. Page, extracted-text and time limits for the PR3 upload route are still open; `/codex-review` round 4 on PR #4 flagged both, since a small PDF can expand to a large text layer or many pages.
+- Decided: `COMPLETE` requires page-image evidence, and pages without it are flagged to the user. Applied October 12, 2026: a blank render of a page with a text layer is not evidence and blocks; document-level gaps are flags with `page: null`.
+- Decided: the model route is Vercel AI Gateway restricted to OpenAI, using Alex's OpenAI key, with a spend cap of $10 for PR2. Still open: reference adjudication and tolerances.
 - Named access for seven people: a Pro upgrade or another route, since Hobby allows one external collaborator.
 - The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
 - Whether to send the design (4) conflicts back to Design, or only reject them at import.
@@ -241,3 +245,6 @@ Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git
 | 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
 | 1.0.14-repo.2 | The contract test no longer pins P0. Rehearsing the P1 `scope_update` after the PR1 merge showed CI would fail, and only a feature change could fix it. |
 | 1.0.14-repo.3 | `scope_update` to P1, adding `F-P1-analysis`. Records Alex's signed-in check. |
+| 1.0.14-repo.4 | PR2 draft: shared analysis service with full page inventory, evaluation wrapper, stdout/JSON tests, and file-isolation tests for the wrapper and service. pypdf is proposed. Review fixes: encrypted page trees, failure records, kept geometry. |
+| 1.0.14-repo.5 | Alex's decisions: pypdf, PDFium rendering, `cryptography`, a 50 MB cap, COMPLETE requires page images, and Vercel AI Gateway to OpenAI with a $10 cap. Mechanics-only run on both development cases. |
+| 1.0.14-repo.6 | PR #4 review fixes: bounded and closed renders, file-descriptor-level stdout, document-level and blank-with-text flags. Mechanics rerun on `bb63e5c`. Gateway smoke test and access probes. |

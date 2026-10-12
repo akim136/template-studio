@@ -21,6 +21,8 @@
 /_incoming/
 Template_Baseline_*
 ACCESS_ROSTER*
+# Analysis run records hold source text. Keep them outside the repository; this is a backstop.
+/eval/runs/
 
 # Local environment and tool state
 .env
