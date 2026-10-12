@@ -27,6 +27,7 @@ from studio.services.analysis import AnalysisError, analyze
 from studio.services.spend import SpendLedger
 
 ROOT = Path(__file__).resolve().parents[1]
+PAGE_LIMIT = 10_000  # a page number past this is a typo; it is refused before expanding
 
 
 def _outside_repo(path: Path) -> Path:
@@ -41,7 +42,7 @@ def _pages(text: str) -> list[int]:
     for part in text.split(","):
         first, _, last = part.partition("-")
         first, last = int(first), int(last or first)
-        if first < 1 or last < first:
+        if first < 1 or last < first or last > PAGE_LIMIT:
             raise ValueError(f"{part} is not a page range")
         pages.update(range(first, last + 1))
     return sorted(pages)

@@ -375,3 +375,25 @@ def test_the_cli_reserves_the_record_before_any_call(tmp_path, monkeypatch):
     assert code == 2 and fake.requests == []
     assert json.loads(out.read_text())["status"] == "NOT_RUN"
     assert out.stat().st_mode & 0o777 == 0o400
+
+
+def test_a_preflight_that_did_not_pass_sends_no_page(tmp_path):
+    def unreachable(body):
+        if page_of(body) is None:
+            return gateway.GatewayError("no response from the gateway (URLError)")
+        return None
+
+    fake = FakeGateway(fail=unreachable)
+    record = run(tmp_path, fake)
+    assert page_calls(fake) == [] and record["status"] == "PARTIAL"
+    assert record["preflight"]["status"].startswith("FAILED")
+    assert record["stop_reason"].startswith("preflight")
+    assert all(e["stage_a"].startswith("NOT_RUN") for e in record["evidence"])
+
+
+def test_the_cli_refuses_a_page_range_beyond_any_document_before_expanding_it():
+    import eval.infer
+
+    with pytest.raises(ValueError, match="page range"):
+        eval.infer._pages(f"1-{eval.infer.PAGE_LIMIT + 1}")
+    assert eval.infer._pages("2-3,1") == [1, 2, 3]

@@ -167,6 +167,27 @@ def _measured(number: int, page, reason: str) -> PageCandidates:
     return PageCandidates(number, [], reason=reason, rotation=page.get_rotation(), **size)
 
 
+def _one_page(pdf, number: int, wanted: set[int] | None) -> PageCandidates:
+    """One page must not stop the rest. A page whose scan fails keeps its measured size, so it
+    can still be inspected from its image and text."""
+    try:
+        page = pdf[number - 1]
+    except Exception as error:
+        return PageCandidates(number, [], reason=f"{type(error).__name__}: {error}")
+    try:
+        if wanted is None or number in wanted:
+            return _page_candidates(number, page)
+        return _measured(number, page, "not requested")
+    except Exception as error:
+        reason = f"{type(error).__name__}: {error}"
+        try:
+            return _measured(number, page, reason)
+        except Exception:
+            return PageCandidates(number, [], reason=reason)
+    finally:
+        page.close()
+
+
 def extract_candidates(source: bytes, pages: list[int] | None = None) -> list[PageCandidates]:
     """Every page PDFium can open is measured; candidates are read only on `pages` (default:
     all). A page that fails carries its reason, and so does every requested page of a document
@@ -181,18 +202,7 @@ def extract_candidates(source: bytes, pages: list[int] | None = None) -> list[Pa
         try:
             results = []
             for index in range(len(pdf)):
-                try:
-                    page = pdf[index]
-                    try:
-                        if wanted is None or index + 1 in wanted:
-                            results.append(_page_candidates(index + 1, page))
-                        else:
-                            results.append(_measured(index + 1, page, "not requested"))
-                    finally:
-                        page.close()
-                except Exception as error:  # one page must not stop the rest
-                    reason = f"{type(error).__name__}: {error}"
-                    results.append(PageCandidates(index + 1, [], reason=reason))
+                results.append(_one_page(pdf, index + 1, wanted))
             return results
         finally:
             pdf.close()

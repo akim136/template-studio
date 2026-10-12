@@ -185,3 +185,13 @@ def test_a_document_pdfium_cannot_open_gives_a_reason_per_requested_page():
     pages = extract_candidates(b"%PDF-1.7 not really", pages=[1, 2])
     assert [p.page for p in pages] == [1, 2]
     assert all(p.width_pt == 0 and "could not open" in p.reason for p in pages)
+
+
+def test_a_page_whose_scan_fails_keeps_its_measured_size(monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("synthetic scan failure")
+
+    monkeypatch.setattr(candidates_module, "_underscore_runs", broken)
+    (page,) = extract_candidates(make_pdf([FORM]))
+    assert page.candidates == [] and "RuntimeError" in page.reason
+    assert (page.width_pt, page.height_pt) == (612.0, 792.0)

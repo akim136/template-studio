@@ -435,6 +435,8 @@ def run(
         source, analysis, config, token=token, ledger=ledger, transport=transport, run_id=run_id
     )
     preflight = runner.preflight()
+    if preflight["status"] != "PASSED":  # no page is sent on a route that was not proven
+        runner.stop.set(f"preflight: {preflight['status']}")
     with ThreadPoolExecutor(max_workers=config.workers) as pool:
         futures = [
             pool.submit(runner.page, n, candidates.get(n, PageCandidates(n, [], reason="none")))
