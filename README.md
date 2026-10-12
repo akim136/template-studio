@@ -104,10 +104,13 @@ names out; it is not a login, and any process on this machine is answered. A fai
   operation ID and offers only `POST .../operation/status-check`; a second create of the same
   revision is refused. A create the provider holds wins over a concurrent check that missed it.
   One reported or found after its operation was replaced takes the slot back if the replacement
-  failed; otherwise it is kept in the orphan list, because the provider may hold both.
-- Every operation answer carries `orphans` (unresolved ones) and, while any remain, a `warning`.
-  An unresolved orphan refuses every create (409) until someone checks the provider and posts
-  `POST .../operation/orphans/{operation_id}/resolve` with a `note` saying what they found.
+  failed and nothing was created since; otherwise it is kept in the orphan list, because the
+  provider may hold both. An orphan that cannot be written is named only in the 503 error.
+- The create, read and status-check answers carry `orphans` (unresolved ones) and, while any
+  remain, a `warning`. An unresolved orphan refuses every create with 409, listing them under
+  `detail.current.orphans`, until someone checks the provider and posts
+  `POST .../operation/orphans/{operation_id}/resolve` with a `note` saying what they found; the
+  answer is the resolved record.
 
 ## Checks
 

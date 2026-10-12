@@ -339,28 +339,32 @@ def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
     assert operations.check_status(approved["id"])["state"] == CREATED
 
 
+def kept_then_its_replacement_failed(operations, adapter, clock, approved):
+    """Runs inside the first create: a status check keeps it as an orphan while a second create is
+    open, and the second is then declared FAILED, so the first can take its slot back."""
+    first_id = adapter.calls[0]
+    clock.advance(minutes=5)
+
+    def replaced_while_this_check_looks():
+        assert operations.check_status(approved["id"])["state"] == FAILED  # not found yet
+        adapter.create_outcome = "timeout-before"
+        assert create(operations, approved)["state"] == NEEDS_STATUS_CHECK  # open
+        adapter.remote[first_id] = Found(f"remote-{first_id}", digest(adapter.payloads[0]))
+
+    adapter.during_find = replaced_while_this_check_looks
+    assert "resolve by hand" in operations.check_status(approved["id"])["note"]
+    clock.advance(minutes=5)
+    assert operations.check_status(approved["id"])["state"] == FAILED  # nothing created
+    adapter.create_outcome = "ok"
+
+
 def test_an_operation_that_takes_its_slot_back_is_not_left_listed_as_an_orphan(
     services, clock, approved
 ):
     operations, adapter = scripted(services, clock)
-
-    def meanwhile():
-        first_id = adapter.calls[0]
-        clock.advance(minutes=5)
-
-        def replaced_while_this_check_looks():
-            assert operations.check_status(approved["id"])["state"] == FAILED  # not found yet
-            adapter.create_outcome = "timeout-before"
-            assert create(operations, approved)["state"] == NEEDS_STATUS_CHECK  # open
-            adapter.remote[first_id] = Found(f"remote-{first_id}", digest(adapter.payloads[0]))
-
-        adapter.during_find = replaced_while_this_check_looks
-        assert "resolve by hand" in operations.check_status(approved["id"])["note"]
-        clock.advance(minutes=5)
-        assert operations.check_status(approved["id"])["state"] == FAILED  # nothing created
-        adapter.create_outcome = "ok"
-
-    adapter.during_create = meanwhile
+    adapter.during_create = lambda: kept_then_its_replacement_failed(
+        operations, adapter, clock, approved
+    )
     first = create(operations, approved)
     assert first["state"] == CREATED and operations.get(approved["id"]) == first
     assert "resolve by hand" not in orphan(services, approved, first["id"])["note"]
@@ -630,3 +634,110 @@ def test_resolving_needs_a_note_and_a_kept_orphan_and_happens_once(services, clo
     assert first["resolution"]["by"] == "anonymous"
     clock.advance(minutes=1)
     assert operations.resolve(approved["id"], kept["id"], "again", "other@x") == first
+
+
+def test_a_late_create_does_not_take_back_a_slot_whose_history_moved_on(services, clock, approved):
+    """The first create is declared FAILED and a second creates the same revision; a later
+    revision's create is refused, so the slot is FAILED but lists the second as replaced. The
+    first landing now must not erase the second."""
+    operations, adapter = scripted(services, clock)
+    seen = {}
+
+    def history_moved_on():
+        replaced_by_a_create(operations, clock, approved)
+        seen["second"] = operations.get(approved["id"])
+        adapter.create_outcome = "refuse"
+        seen["refused"] = create(operations, approve_next(services, approved))
+        adapter.create_outcome = "ok"
+
+    adapter.during_create = history_moved_on
+    first = create(operations, approved)
+    assert first.get("status") == "unresolved" and "resolve by hand" in first["note"]
+    slot = operations.get(approved["id"])
+    assert slot["id"] == seen["refused"]["id"] and slot["state"] == FAILED
+    assert [r["id"] for r in slot["replaced"]] == [seen["second"]["id"]]
+    assert operations.orphans(approved["id"]) == [first]
+
+
+def test_an_orphan_kept_while_a_create_is_recorded_stops_it_before_the_provider(
+    services, clock, approved, monkeypatch
+):
+    operations, adapter = scripted(services, clock)
+    first = create(operations, approved)
+    later = approve_next(services, approved)
+    late = {"id": "0" * 32, "status": "unresolved", "note": "kept by a late report"}
+    real = services.store.replace
+
+    def orphan_kept_first(key, data, etag):
+        if key.endswith("/operation.json") and b'"CREATING"' in data:
+            services.store.put_new(orphan_key(approved), canonical({"orphans": [late]}))
+        return real(key, data, etag)
+
+    monkeypatch.setattr(services.store, "replace", orphan_kept_first)
+    with pytest.raises(Conflict, match="check the provider") as refused:
+        create(operations, later)
+    assert refused.value.current == {"orphans": [late]}
+    assert adapter.calls == [first["id"]]  # the provider was not called again
+    slot = operations.get(approved["id"])
+    assert slot["state"] == FAILED and slot["note"].startswith("not attempted")
+    assert [r["id"] for r in slot["replaced"]] == [first["id"]]
+
+
+def test_a_slot_taken_back_is_not_an_orphan_even_if_its_record_cannot_be_marked(
+    services, clock, approved, monkeypatch
+):
+    operations, adapter = scripted(services, clock)
+    real = services.store.replace
+
+    def marking_fails(key, data, etag):
+        if b'"took_slot_back"' in data:
+            raise StorageError("No space left on device")
+        return real(key, data, etag)
+
+    def meanwhile():
+        kept_then_its_replacement_failed(operations, adapter, clock, approved)
+        monkeypatch.setattr(services.store, "replace", marking_fails)
+
+    adapter.during_create = meanwhile
+    first = create(operations, approved)
+    assert first["state"] == CREATED and operations.get(approved["id"]) == first
+    assert orphan(services, approved, first["id"])["status"] == "unresolved"  # not marked
+    assert operations.orphans(approved["id"]) == []  # it holds the slot
+    later = create(operations, approve_next(services, approved))
+    assert later["state"] == CREATED and operations.orphans(approved["id"]) == []
+
+
+@pytest.mark.parametrize("listed_before", [False, True])
+def test_an_orphan_kept_while_another_writer_changes_the_list_loses_nothing(
+    services, clock, approved, monkeypatch, listed_before
+):
+    key = orphan_key(approved)
+    other = {"id": "1" * 32, "status": "unresolved", "note": "kept by another request"}
+    earlier = [{"id": "2" * 32, "status": "resolved"}] if listed_before else []
+    if listed_before:
+        services.store.put_new(key, canonical({"orphans": earlier}))
+    real_put, real_replace = services.store.put_new, services.store.replace
+    raced = []
+
+    def first_write_loses(write):
+        def wrapped(target, data, *etag):
+            if target == key and not raced:
+                raced.append(target)
+                stored = services.store.get(key)
+                listed = [] if stored is None else json.loads(stored.data)["orphans"]
+                body = canonical({"orphans": [*listed, other]})
+                if stored is None:
+                    real_put(key, body)
+                else:
+                    real_replace(key, body, stored.etag)
+            return write(target, data, *etag)
+
+        return wrapped
+
+    monkeypatch.setattr(services.store, "put_new", first_write_loses(real_put))
+    monkeypatch.setattr(services.store, "replace", first_write_loses(real_replace))
+    operations, kept = orphaned(services, clock, approved)
+    assert raced == [key]
+    listed = json.loads(services.store.get(key).data)["orphans"]
+    assert [o["id"] for o in listed] == [o["id"] for o in earlier] + [other["id"], kept["id"]]
+    assert operations.orphans(approved["id"]) == [other, kept]

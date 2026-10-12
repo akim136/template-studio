@@ -258,9 +258,10 @@ def approve(template_id: str, body: Bound, request: Request) -> dict:
     return _call(templates.approve, template_id, body.revision, body.binding)
 
 
-def _with_orphans(operations: Operations, template_id: str, operation: dict) -> dict:
-    """Every operation answer lists unresolved orphans, with a warning while any remain."""
-    orphans = _call(operations.orphans, template_id, writes=False)
+def _with_orphans(operations: Operations, template_id: str, operation: dict, writes: bool) -> dict:
+    """An operation answer lists unresolved orphans, with a warning while any remain. After a
+    write, a failure to read them must not read as the write having failed."""
+    orphans = _call(operations.orphans, template_id, writes=writes)
     view = {**operation, "orphans": orphans}
     if orphans:
         view["warning"] = ORPHANED
@@ -271,21 +272,21 @@ def _with_orphans(operations: Operations, template_id: str, operation: dict) -> 
 def create_signing_template(template_id: str, body: Bound, request: Request) -> dict:
     operations = _services(request).operations
     operation = _call(operations.create, template_id, body.revision, body.binding)
-    return _with_orphans(operations, template_id, operation)
+    return _with_orphans(operations, template_id, operation, writes=True)
 
 
 @router.get("/templates/{template_id}/operation")
 def get_operation(template_id: str, request: Request) -> dict:
     operations = _services(request).operations
     operation = _call(operations.get, template_id, writes=False)
-    return _with_orphans(operations, template_id, operation)
+    return _with_orphans(operations, template_id, operation, writes=False)
 
 
 @router.post("/templates/{template_id}/operation/status-check")
 def check_operation(template_id: str, request: Request) -> dict:
     operations = _services(request).operations
     operation = _call(operations.check_status, template_id)
-    return _with_orphans(operations, template_id, operation)
+    return _with_orphans(operations, template_id, operation, writes=True)
 
 
 @router.post("/templates/{template_id}/operation/orphans/{operation_id}/resolve")
