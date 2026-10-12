@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.143.0",
+    "pypdf>=6.20.0",
 ]
 
 [tool.uv]
