@@ -10,6 +10,7 @@ from pypdf import PageObject
 from pypdf.errors import DependencyError
 
 from studio.services import analysis as analysis_module
+from studio.services import render
 from studio.services.analysis import (
     INFERENCE_NOT_RUN,
     NO_TEXT_REASON,
@@ -18,7 +19,7 @@ from studio.services.analysis import (
     analyze,
 )
 from studio.services.render import PageImage
-from tests.analysis.pdf_factory import DRAWN_BOX, encrypt, make_pdf
+from tests.analysis.pdf_factory import DRAWN_BOX, encrypt, make_pdf, shared_tree_pdf
 
 
 def test_inventory_records_every_page_from_the_source_bytes():
@@ -168,8 +169,8 @@ def test_every_page_is_rendered_and_pages_without_text_are_flagged():
 def test_a_page_that_cannot_be_rendered_is_flagged_and_blocks_complete(monkeypatch):
     real = analysis_module.inventory_images
 
-    def one_page_fails(source):
-        count, images = real(source)
+    def one_page_fails(source, before_page=None):
+        count, images = real(source, before_page)
         return count, [images[0], "PdfiumError: synthetic render failure"]
 
     monkeypatch.setattr(analysis_module, "inventory_images", one_page_fails)
@@ -180,7 +181,7 @@ def test_a_page_that_cannot_be_rendered_is_flagged_and_blocks_complete(monkeypat
 
 
 def test_a_document_pdfium_cannot_open_flags_every_page(monkeypatch):
-    def cannot_open(source):
+    def cannot_open(source, before_page=None):
         raise RuntimeError("synthetic open failure")
 
     monkeypatch.setattr(analysis_module, "inventory_images", cannot_open)
@@ -209,17 +210,99 @@ def test_a_source_exactly_at_the_size_limit_is_analyzed(monkeypatch):
     assert analyze(source).inventory == "COMPLETE"
 
 
-def test_the_size_limit_is_50_mib_and_the_message_says_so():
-    assert analysis_module.MAX_SOURCE_BYTES == 50 * 1024 * 1024
-    with pytest.raises(AnalysisError, match=r"\(50 MiB\)"):
+def test_the_limits_are_the_agreed_ones_and_the_size_message_says_25_mib():
+    assert analysis_module.MAX_SOURCE_BYTES == 25 * 1024 * 1024
+    assert analysis_module.MAX_PAGES == 400
+    assert analysis_module.MAX_TEXT_CHARS == 4_000_000
+    assert analysis_module.TIME_LIMIT_S == 180
+    with pytest.raises(AnalysisError, match=r"\(25 MiB\)"):
         analyze(b"0" * (analysis_module.MAX_SOURCE_BYTES + 1))
+
+
+def test_a_source_over_the_page_limit_fails_before_any_page_is_read(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("read or rendered a page of a source over the limit")
+
+    monkeypatch.setattr(analysis_module, "MAX_PAGES", 2)
+    monkeypatch.setattr(analysis_module, "_page_record", must_not_run)
+    monkeypatch.setattr(analysis_module, "inventory_images", must_not_run)
+    with pytest.raises(AnalysisError, match="has 3 pages; the limit is 2") as caught:
+        analyze(make_pdf(["a", "b", "c"]))
+    assert caught.value.to_dict()["status"] == "FAILED"
+
+
+def test_a_page_tree_is_expanded_only_to_a_bound_before_its_pages_are_counted(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("read or rendered a page of a source over the limit")
+
+    monkeypatch.setattr(analysis_module, "_page_record", must_not_run)
+    monkeypatch.setattr(analysis_module, "inventory_images", must_not_run)
+    with pytest.raises(AnalysisError, match=r"page tree .*1601 > 1600.*the page limit is 400"):
+        analyze(shared_tree_pdf(depth=20))  # 2**20 pages through 22 objects
+
+
+def test_a_source_at_the_page_limit_is_analyzed(monkeypatch):
+    monkeypatch.setattr(analysis_module, "MAX_PAGES", 2)
+    assert analyze(make_pdf(["a", "b"])).inventory == "COMPLETE"
+
+
+def test_pdfium_is_held_to_the_page_limit_before_it_renders(monkeypatch):
+    def must_not_render(*args, **kwargs):
+        raise AssertionError("rendered a page of a source over the limit")
+
+    source = make_pdf(["a", "b"])
+    pages, _ = analysis_module._read(source, deadline=float("inf"))
+    monkeypatch.setattr(analysis_module, "MAX_PAGES", 1)
+    monkeypatch.setattr(render, "_render", must_not_render)
+    with pytest.raises(analysis_module.LimitExceeded, match="PDFium found 2 pages; the limit"):
+        analysis_module._with_images(source, pages, deadline=float("inf"))
+
+
+def test_text_past_the_limit_fails_the_analysis(monkeypatch):
+    monkeypatch.setattr(analysis_module, "MAX_TEXT_CHARS", 5)
+    analyze(make_pdf(["abcde"]))  # exactly at the limit
+    with pytest.raises(AnalysisError, match="reaches 8 characters by page 2; the limit is 5"):
+        analyze(make_pdf(["abc", "defgh"]))
+
+
+def clock(step):
+    ticks = iter(range(0, 10_000, step))
+    return lambda: next(ticks)
+
+
+def test_an_analysis_past_its_time_limit_fails_between_pages(monkeypatch):
+    monkeypatch.setattr(analysis_module, "_clock", clock(100))  # start 0, pages at 100 and 200
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds .*reading page 2"):
+        analyze(make_pdf(["a", "b"]))
+
+
+def test_the_time_limit_also_covers_rendering(monkeypatch):
+    monkeypatch.setattr(analysis_module, "_clock", clock(50))  # read ends at 150, render at 200
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds .*rendering page 1"):
+        analyze(make_pdf(["a", "b", "c"]))
+
+
+def test_the_time_limit_is_checked_once_more_after_the_last_page(monkeypatch):
+    monkeypatch.setattr(analysis_module, "_clock", clock(70))  # read 70, render 140, end 210
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds after the last page"):
+        analyze(make_pdf(["a"]))
+
+
+def test_the_time_limit_holds_when_pdfium_cannot_open_the_document(monkeypatch):
+    def unopenable(*args, **kwargs):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(analysis_module, "inventory_images", unopenable)
+    monkeypatch.setattr(analysis_module, "_clock", clock(100))  # read 100, end 200
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds after the last page"):
+        analyze(make_pdf(["a"]))
 
 
 def test_pages_pdfium_did_not_find_are_flagged(monkeypatch):
     real = analysis_module.inventory_images
 
-    def finds_one(source):
-        count, images = real(source)
+    def finds_one(source, before_page=None):
+        count, images = real(source, before_page)
         return 1, images[:1]
 
     monkeypatch.setattr(analysis_module, "inventory_images", finds_one)
@@ -232,8 +315,8 @@ def test_pages_pdfium_did_not_find_are_flagged(monkeypatch):
 def test_extra_pages_pdfium_found_are_flagged_not_dropped(monkeypatch):
     real = analysis_module.inventory_images
 
-    def finds_three(source):
-        count, images = real(source)
+    def finds_three(source, before_page=None):
+        count, images = real(source, before_page)
         return 3, images + images[:1]
 
     monkeypatch.setattr(analysis_module, "inventory_images", finds_three)
@@ -246,8 +329,8 @@ def test_a_blank_render_of_a_page_with_text_blocks_complete(monkeypatch):
     """PDFium does not report content it cannot draw; a blank page that has text is suspect."""
     real = analysis_module.inventory_images
 
-    def first_page_blank(source):
-        count, images = real(source)
+    def first_page_blank(source, before_page=None):
+        count, images = real(source, before_page)
         return count, [replace(images[0], blank=True), *images[1:]]
 
     monkeypatch.setattr(analysis_module, "inventory_images", first_page_blank)

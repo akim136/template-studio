@@ -11,8 +11,11 @@ drawn on it. No file other than the source is read to build a request, and no to
 Before any page is sent, one preflight call with no page content proves the route. The gateway
 cannot be told to refuse a fallback from Alex's key to Vercel's credentials, so the route is
 also checked on every answer, and a violation stops the run; calls already in flight when it
-happens (at most `workers`) have been sent. A rotated page is not sent: its fields need an
-audited normalizer first.
+happens (at most `workers`) have been sent. A route that accepts that fallback continues, and
+each page call that fell back is marked in its evidence. On every byok run, `fallback_calls`
+counts the calls that fell back, accepted or not, including the preflight and any call that then
+failed; such a failed call appears only in the count and its ledger row. A rotated page is not
+sent: its fields need an audited normalizer first.
 
 Stage A and stage B are separate, immutable records. A page whose stage B failed has no final
 fields; stage A is never substituted for it. Rendering a page is not inspection: a page counts as
@@ -144,6 +147,13 @@ def _data_url(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
+def _png_size(png: bytes) -> tuple[int, int]:
+    """(width, height) from the PNG header, so a call is reserved for the exact image it sends."""
+    if png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+        raise ValueError("not a PNG image")
+    return int.from_bytes(png[16:20]), int.from_bytes(png[20:24])
+
+
 def _candidate_lines(page: PageCandidates, scale: float) -> str:
     if not page.candidates:
         return "Candidates: none."
@@ -178,6 +188,7 @@ class Runner:
         self.token, self.ledger, self.transport, self.run_id = token, ledger, transport, run_id
         self.stop = _Stop()
         self.observed: set[tuple[str, str, str]] = set()
+        self.fallback_calls = 0  # every call that fell back, including those that then failed
         self.lock = threading.Lock()
 
     def _guard(self, call):
@@ -188,9 +199,11 @@ class Runner:
         try:
             return "RECEIVED", call()
         except gateway.RouteViolation as error:
+            self._count_fallback(error.fell_back)
             self.stop.set(f"route violation: {error}")
             return f"ROUTE_VIOLATION: {error}", None
         except BudgetExceeded as error:
+            self._count_fallback(error.fell_back)
             self.stop.set(f"budget: {error}")
             return f"BUDGET_STOPPED: {error}", None
         except gateway.GatewayError as error:
@@ -206,6 +219,12 @@ class Runner:
             self.observed.add(
                 (result.observed_model, result.observed_provider, result.observed_credential)
             )
+        self._count_fallback(result.fell_back)
+
+    def _count_fallback(self, fell_back: bool) -> None:
+        if fell_back:
+            with self.lock:
+                self.fallback_calls += 1
 
     def preflight(self) -> dict:
         """One call with no page content, so a wrong route is found before any page is sent."""
@@ -220,20 +239,21 @@ class Runner:
                 ledger=self.ledger,
                 label=f"{self.run_id} preflight",
                 worst_case=gateway.worst_case_usd(
-                    route, len(PREFLIGHT_TEXT), 0, PREFLIGHT_OUTPUT_TOKENS
+                    route, len(PREFLIGHT_TEXT), [], PREFLIGHT_OUTPUT_TOKENS
                 ),
                 max_output_tokens=PREFLIGHT_OUTPUT_TOKENS,
                 transport=self.transport,
             )
 
         status, result = self._guard(call)
-        if result is None:
-            return {"status": status}
+        if result is None:  # the preflight is the first call, so any fallback so far is its own
+            return {"status": status, "fell_back": self.fallback_calls > 0}
         self._observe(result)
         return {
             "status": "PASSED",
             "generation_id": result.generation_id,
             "failed_attempts": result.failed_attempts,
+            "fell_back": result.fell_back,
         }
 
     def _call(self, evidence, stage, system, user_text, png, self_check):
@@ -249,7 +269,7 @@ class Runner:
             },
         ]
         worst = gateway.worst_case_usd(
-            self.config.route, len(system) + len(user_text), 1, MAX_OUTPUT_TOKENS
+            self.config.route, len(system) + len(user_text), [_png_size(png)], MAX_OUTPUT_TOKENS
         )
         result = gateway.call(
             self.config.route,
@@ -269,6 +289,7 @@ class Runner:
                 "generation_id": result.generation_id,
                 "observed_model": result.observed_model,
                 "observed_credential": result.observed_credential,
+                "fell_back": result.fell_back,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "market_cost_usd": str(result.market_cost_usd),
@@ -468,12 +489,18 @@ def run(
         "business_rules_sha256": rules_sha,
     }
     all_total, run_total = ledger.totals()
+    route = config.route
     return {
         "profile": PROFILE,
         "status": _status(runner.stop, evidence, analysis),
         "stop_reason": runner.stop.reason,
-        "route": {"model": config.route.model, "credential": config.route.credential},
-        "observed_routes": sorted(list(route) for route in runner.observed),
+        "route": {
+            "model": route.model,
+            "credential": route.credential,
+            "accept_fallback": route.accept_fallback,
+        },
+        "observed_routes": sorted(list(observed) for observed in runner.observed),
+        "fallback_calls": runner.fallback_calls,
         "preflight": preflight,
         "source_sha256": analysis.source_sha256,
         "analysis_inventory": analysis.inventory,
