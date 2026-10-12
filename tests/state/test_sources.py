@@ -74,6 +74,9 @@ def test_a_page_whose_rotation_the_two_readers_disagree_on_is_recorded_as_unknow
     monkeypatch.setattr(sources, "extract_candidates", turned)  # pypdf reads rotation 0
     record = sources.seal(services.store, two_page_pdf())
     assert [page["rotation"] for page in record["pages"]] == [None, None]
+    assert record["inventory"] == "COMPLETE"  # the pages exist; only fields on them are refused
+    flags = [(f["page"], f["blocks_complete"], f["reason"]) for f in record["flags"]]
+    assert flags == [(1, False, sources.UNKNOWN_ROTATION), (2, False, sources.UNKNOWN_ROTATION)]
 
 
 def test_a_rotated_page_is_recorded_in_degrees_when_both_readers_agree(services):

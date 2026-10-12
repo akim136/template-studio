@@ -16,10 +16,14 @@ An operation is recorded before the adapter is called, and moves through these s
 
 A template has at most one operation that is not FAILED, so a create is never repeated blindly.
 
-A create the adapter reports is written onto the stored operation even if a concurrent status
-check moved it meanwhile, so a reported create is never lost or left FAILED. If recording the
-operation fails before the adapter is called, the operation is marked FAILED (not attempted) where
-it landed; if recording the outcome fails after the call, the error says to check its status.
+A create the adapter reports, or a status check finds at the provider, is written onto the stored
+operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
+lost or left FAILED. If the operation was replaced by another meanwhile, the provider may hold
+both: the earlier one is kept under templates/{id}/orphans/ with a note to resolve it by hand. A
+status check that would change nothing writes nothing, so repeated checks cannot crowd out a create
+being recorded. If recording the operation fails before the adapter is called, the operation is
+marked FAILED (not attempted) where it landed; if recording the outcome fails after the call, the
+error says to check its status.
 """
 
 from __future__ import annotations
@@ -43,10 +47,10 @@ FAILED, NEEDS_STATUS_CHECK = "FAILED", "NEEDS_STATUS_CHECK"
 # Not finding a create counts as "nothing was created" only after this long. It must exceed any
 # real adapter's create timeout, or a slow create could land after it was declared failed.
 GRACE = timedelta(minutes=2)
-REPORT_ATTEMPTS = 3  # status checks that can race one reported create
+RECORD_ATTEMPTS = 10  # concurrent writes a create being recorded can lose to before it gives up
 REPLACED = (
-    "the create was reported after this operation was replaced by another; the provider may "
-    "hold both, so resolve by hand"
+    "this operation's create was reported or found after the operation was replaced by another; "
+    "the provider may hold both, so resolve by hand"
 )
 
 
@@ -165,7 +169,7 @@ class Operations:
             note = f"create outcome unknown ({type(error).__name__})"
             return self._after_call(key, operation, etag, NEEDS_STATUS_CHECK, note=note)
         try:
-            operation, etag = self._report(key, operation, etag, external_id)
+            operation, etag = self._record(key, operation, etag, external_id, VERIFYING)
             if etag is None:
                 return operation  # created already, or replaced: its state stands
             return self._settle(key, operation, etag)
@@ -193,8 +197,7 @@ class Operations:
             if found.payload_sha256 != operation["payload_sha256"]:
                 note = "the provider holds different content for this operation; resolve by hand"
                 return self._move(key, operation, etag, NEEDS_STATUS_CHECK, note=note)[0]
-            changes = {"external_id": found.external_id, "reported_created": True, "note": ""}
-            return self._move(key, operation, etag, CREATED, **changes)[0]
+            return self._record(key, operation, etag, found.external_id, CREATED)[0]
         if operation["reported_created"]:
             note = "the adapter reported a create that cannot be found yet; check again"
             return self._move(key, operation, etag, NEEDS_STATUS_CHECK, note=note)[0]
@@ -204,27 +207,37 @@ class Operations:
         note = "nothing was created; a new create is allowed"
         return self._move(key, operation, etag, FAILED, note=note)[0]
 
-    def _report(
-        self, key: str, operation: dict, etag: str, external_id: str
+    def _record(
+        self, key: str, operation: dict, etag: str, external_id: str, state: str
     ) -> tuple[dict, str | None]:
-        """Writes the adapter's report of a create onto the stored operation, whatever a
-        concurrent status check did to it meanwhile, unless it is already CREATED."""
+        """Writes a create the adapter reported (VERIFYING) or the provider holds (CREATED) onto
+        the stored operation, whatever a concurrent status check did to it meanwhile. A CREATED
+        operation stands; a replaced one is kept as an orphan. The etag is None when nothing was
+        written here."""
         current = operation
-        for _ in range(REPORT_ATTEMPTS):
+        for _ in range(RECORD_ATTEMPTS):
             if current["id"] != operation["id"]:
-                note = REPLACED
-                changes = {"external_id": external_id, "reported_created": True, "note": note}
-                return {**operation, **changes, "state": NEEDS_STATUS_CHECK}, None
+                return self._orphan(operation, external_id), None
             if current["state"] == CREATED:
                 return current, None
-            reported = {**current, "external_id": external_id, "reported_created": True}
-            moved = {**reported, "state": VERIFYING, "note": "", "updated_at": self._now()}
+            changes = {"external_id": external_id, "reported_created": True, "note": ""}
+            recorded = {**current, **changes, "state": state, "updated_at": self._now()}
             try:
-                return moved, self.store.replace(key, canonical(moved), etag)
+                return recorded, self.store.replace(key, canonical(recorded), etag)
             except PreconditionFailed:
                 stored = self.store.get(key)
                 current, etag = json.loads(stored.data), stored.etag
         raise StorageError("the operation kept changing while its create was recorded")
+
+    def _orphan(self, operation: dict, external_id: str) -> dict:
+        changes = {"external_id": external_id, "reported_created": True, "note": REPLACED}
+        orphan = {**operation, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": self._now()}
+        key = f"templates/{operation['template_id']}/orphans/{operation['id']}.json"
+        try:
+            self.store.put_new(key, canonical(orphan))
+        except PreconditionFailed:  # kept already, by the report or by a status check
+            return json.loads(self.store.get(key).data)
+        return orphan
 
     def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:
         try:
@@ -246,6 +259,8 @@ class Operations:
     def _move(
         self, key: str, operation: dict, etag: str, state: str, **changes: object
     ) -> tuple[dict, str | None]:
+        if operation["state"] == state and all(operation[k] == v for k, v in changes.items()):
+            return operation, etag  # nothing would change, and a write would race other writers
         moved = {**operation, **changes, "state": state, "updated_at": self._now()}
         try:
             return moved, self.store.replace(key, canonical(moved), etag)

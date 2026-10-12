@@ -16,13 +16,16 @@ Review and approval record the revision and its binding: the hash of the source,
 fields. Every new revision starts with neither. Every save makes a new revision, even one whose
 content matches the last (Alex, October 12, 2026), so any save after a review or approval clears
 them, including undo, redo and policy changes, which all reach the server as saves. The one
-exception is a retried save that already landed: if the head is one past the base with the same
-binding, that revision is returned and no other is made. A review or approval sent for any
+exception is a retried request that already landed: a save may carry a `save_id` chosen by its
+client, and if the head is one past the base and was made by that save_id with the same binding,
+that revision is returned and no other is made. Another editor's save with the same content has
+another save_id, so it is refused as stale. A review or approval sent for any
 revision or binding other than the head's is refused as stale.
 
 A source whose page inventory is not COMPLETE can be worked on, but it blocks review, approval
 and create: every snapshot shows the source's inventory and flags, so the user sees what is
-missing (Alex's rule: anything incomplete is flagged to the user).
+missing (Alex's rule: anything incomplete is flagged to the user). A template keeps its source,
+so such a template stays blocked; a complete source needs a new template.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from studio.state.policy import Policy, PolicyError, field_errors, issues, parse
 from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical, digest
 
 TEMPLATE_ID = re.compile(r"[0-9a-f]{32}")
+SAVE_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
 ACTOR = "anonymous"  # Vercel admission is not app identity (guide §6)
 MOVED = "the template was saved since this revision; reload it"
 INCOMPLETE = "the source's page inventory is INCOMPLETE; see its flags"
@@ -66,9 +70,16 @@ class Templates:
         return self.snapshot(head)
 
     def save(
-        self, template_id: str, base_revision: int, policy: object, fields: object
+        self,
+        template_id: str,
+        base_revision: int,
+        policy: object,
+        fields: object,
+        save_id: str | None = None,
     ) -> tuple[dict, bool]:
         """Returns the saved snapshot and whether this call made a new revision."""
+        if save_id is not None and not (isinstance(save_id, str) and SAVE_ID.fullmatch(save_id)):
+            raise Invalid(["save_id is 8 to 64 letters, digits, '-' or '_'"])
         head, etag = self.head(template_id)
         parsed = self._policy(policy)
         record = self._source(head["source_sha256"])
@@ -78,12 +89,14 @@ class Templates:
         bound = binding(head["source_sha256"], parsed.to_dict(), fields)
         for _ in range(SAVE_ATTEMPTS):
             if head["revision"] != base_revision:
-                if head["revision"] == base_revision + 1 and head["binding"] == bound:
-                    return self.snapshot(head), False  # a retry of a save that already landed
+                landed = head["revision"] == base_revision + 1 and head["binding"] == bound
+                if landed and save_id is not None and head.get("save_id") == save_id:
+                    return self.snapshot(head), False
                 raise Conflict(MOVED, self.snapshot(head))
             try:
-                committed = self._commit(template_id, (head, etag), None, parsed, fields)
-            except PreconditionFailed:  # the head changed since it was read: read it again
+                current = (head, etag)
+                committed = self._commit(template_id, current, None, parsed, fields, save_id)
+            except PreconditionFailed:
                 head, etag = self.head(template_id)
                 continue
             return self.snapshot(committed), True
@@ -172,6 +185,7 @@ class Templates:
         source_sha256: str | None,
         policy: Policy,
         fields: list[dict],
+        save_id: str | None = None,
     ) -> dict:
         previous = current[0] if current else None
         source = previous["source_sha256"] if previous else source_sha256
@@ -196,6 +210,7 @@ class Templates:
             "object": name,
             "binding": binding(source, revision["policy"], fields),
             "source_sha256": source,
+            "save_id": save_id,
             "review": None,
             "approval": None,
         }

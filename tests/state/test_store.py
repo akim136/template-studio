@@ -109,6 +109,14 @@ def test_new_folders_are_synced_into_their_parents(tmp_path, monkeypatch):
     assert synced == [root, root / "a", root / "a" / "b"]  # each new entry, then the object
 
 
+def test_a_new_state_directory_is_synced_into_its_parent(tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(store_module, "_sync_folder", synced.append)
+    LocalObjectStore(tmp_path / "s")
+    LocalObjectStore(tmp_path / "s")  # already there: nothing new to sync
+    assert synced == [tmp_path]
+
+
 def test_two_stores_on_one_folder_never_both_win(tmp_path, monkeypatch):
     real = LocalObjectStore._write
 

@@ -72,7 +72,8 @@ class LocalObjectStore:
     The directory must be a real directory (not a link), owned by this user and closed to
     everyone else, or the store refuses to open. Each write goes to a temporary file that is
     flushed, synced and renamed into place, so a reader sees the old object or the new one, never
-    part of one; every folder a write creates is synced into its parent. A lock file serializes
+    part of one; every folder the store creates, the directory itself included, is synced into its
+    parent. A lock file serializes
     conditional writes across threads and processes on this machine.
     """
 
@@ -80,8 +81,11 @@ class LocalObjectStore:
         self.root = Path(root)
         self._lock = threading.Lock()
         try:
+            created = not os.path.lexists(self.root)
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             info = self.root.lstat()
+            if created:
+                _sync_folder(self.root.parent)
         except OSError as error:
             raise StorageError(f"cannot create the state directory: {error.strerror}") from None
         if not stat.S_ISDIR(info.st_mode):

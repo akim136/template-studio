@@ -6,8 +6,13 @@ Saved. The upload route is the local stand-in for the direct R2 upload, which wa
 decisions (guide §10).
 
 `StateGate` answers before FastAPI reads or validates a body: 503 when state is not configured,
+403 unless the request is addressed to a loopback host and any page that sent it is served from one,
 and 413 when a JSON body is over MAX_JSON_BYTES, by its declared length or by the bytes that
 arrive. The upload route bounds its own body at MAX_SOURCE_BYTES.
+
+The loopback check keeps other machines, other sites' pages and rebound host names away from saved
+state. It is not an identity: anyone who can run a request on this machine is answered, and the
+studio has no login of its own (Alex's access decision, guide §10).
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -37,6 +43,8 @@ MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
 MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
 NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
 UPLOAD_PATH = "/api/sources"
+LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+NOT_LOOPBACK = "saved state answers only loopback requests from loopback pages"
 
 
 @dataclass(frozen=True)
@@ -63,10 +71,9 @@ def services_from_environment(environ: Mapping[str, str], repository: Path) -> S
     root = environ.get(STATE_DIR_ENV)
     if not root:
         return None
-    resolved = Path(root).resolve()
-    if resolved.is_relative_to(repository.resolve()):
+    if Path(root).resolve().is_relative_to(repository.resolve()):
         raise RuntimeError(f"{STATE_DIR_ENV} must be outside the repository")
-    return local_services(resolved)
+    return local_services(Path(root).absolute())  # unresolved, so a link is seen and refused
 
 
 class _Body(BaseModel):
@@ -82,6 +89,7 @@ class Save(_Body):
     base_revision: int
     policy: dict[str, Any]
     fields: list[Any]
+    save_id: str  # chosen by the client per save; a retry of the same request reuses it
 
 
 class Bound(_Body):
@@ -103,6 +111,9 @@ class StateGate:
             return
         if getattr(scope["app"].state, "services", None) is None:
             await _answer(scope, receive, send, 503, NOT_CONFIGURED)
+            return
+        if not _loopback(Headers(scope=scope)):
+            await _answer(scope, receive, send, 403, NOT_LOOPBACK)
             return
         if path == UPLOAD_PATH:
             await self.app(scope, receive, send)
@@ -134,6 +145,18 @@ def _state_route_path(scope: Scope) -> str | None:
     return None
 
 
+def _loopback(headers: Headers) -> bool:
+    try:
+        host = urlsplit(f"//{headers.get('host', '')}").hostname
+        origin = headers.get("origin")
+        if origin is None:
+            return host in LOOPBACK
+        page = urlsplit(origin)
+        return host in LOOPBACK and page.scheme in ("http", "https") and page.hostname in LOOPBACK
+    except ValueError:  # a malformed host or port
+        return False
+
+
 async def _answer(scope: Scope, receive: Receive, send: Send, status: int, detail: str) -> None:
     await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
 
@@ -158,7 +181,7 @@ def _services(request: Request) -> Services:
     return services
 
 
-def _call(action: Callable[..., Any], *args: Any) -> Any:
+def _call(action: Callable[..., Any], *args: Any, writes: bool = True) -> Any:
     try:
         return action(*args)
     except NotFound:
@@ -168,6 +191,8 @@ def _call(action: Callable[..., Any], *args: Any) -> Any:
     except Conflict as error:
         raise HTTPException(409, {"reason": error.reason, "current": error.current}) from None
     except StorageError as error:
+        if not writes:
+            raise HTTPException(503, f"storage failed; reload and try again: {error}") from None
         detail = "storage failed; this request may or may not have been saved, so reload"
         raise HTTPException(503, f"{detail} before retrying: {error}") from None
 
@@ -198,13 +223,13 @@ def create_template(body: NewTemplate, request: Request) -> dict:
 
 @router.get("/templates/{template_id}")
 def get_template(template_id: str, request: Request) -> dict:
-    return _call(_services(request).templates.get, template_id)
+    return _call(_services(request).templates.get, template_id, writes=False)
 
 
 @router.put("/templates/{template_id}")
 def save_template(template_id: str, body: Save, request: Request) -> dict:
     templates = _services(request).templates
-    args = (template_id, body.base_revision, body.policy, body.fields)
+    args = (template_id, body.base_revision, body.policy, body.fields, body.save_id)
     snapshot, changed = _call(templates.save, *args)
     return {"saved": True, "new_revision": changed, "template": snapshot}
 
@@ -229,7 +254,7 @@ def create_signing_template(template_id: str, body: Bound, request: Request) -> 
 
 @router.get("/templates/{template_id}/operation")
 def get_operation(template_id: str, request: Request) -> dict:
-    return _call(_services(request).operations.get, template_id)
+    return _call(_services(request).operations.get, template_id, writes=False)
 
 
 @router.post("/templates/{template_id}/operation/status-check")

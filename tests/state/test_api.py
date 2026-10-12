@@ -1,4 +1,7 @@
+import asyncio
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,12 +13,13 @@ from tests.state.helpers import POLICY, field, two_page_pdf
 from tests.test_health import STATE_ROUTES
 
 ROOT = Path(__file__).resolve().parents[2]
+SAVE_ID = "request-0001"
 
 
 @pytest.fixture
 def client(services, monkeypatch):
     monkeypatch.setattr(app.state, "services", services)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client
 
 
@@ -29,8 +33,9 @@ def template(client):
     return response.json()
 
 
-def save(client, template_id, base, fields, policy=POLICY):
-    body = {"base_revision": base, "policy": policy, "fields": fields}
+def save(client, template_id, base, fields, policy=POLICY, save_id=None):
+    save_id = save_id or uuid.uuid4().hex
+    body = {"base_revision": base, "policy": policy, "fields": fields, "save_id": save_id}
     return client.put(f"/api/templates/{template_id}", json=body)
 
 
@@ -63,6 +68,14 @@ def test_a_stale_save_answers_409_with_the_current_template(client, template):
     assert stale.json()["detail"]["current"] == newer
 
 
+def test_a_retried_request_returns_the_save_that_landed(client, template):
+    first = save(client, template["id"], 1, [field()], save_id="request-0001").json()
+    again = save(client, template["id"], 1, [field()], save_id="request-0001")
+    assert again.status_code == 200 and again.json()["new_revision"] is False
+    assert again.json()["template"] == first["template"]
+    assert save(client, template["id"], 1, [field()]).status_code == 409  # another request
+
+
 def test_a_stale_approval_sent_directly_to_the_api_is_refused(client, template):
     url = f"/api/templates/{template['id']}"
     first = save(client, template["id"], 1, [field()]).json()["template"]
@@ -82,10 +95,12 @@ def test_invalid_fields_answer_422_with_reasons(client, template):
 @pytest.mark.parametrize(
     "body",
     [
-        {"base_revision": "1", "policy": POLICY, "fields": []},
-        {"base_revision": True, "policy": POLICY, "fields": []},
-        {"base_revision": 1, "policy": POLICY, "fields": [], "saved": True},
-        {"base_revision": 1, "fields": []},
+        {"base_revision": "1", "policy": POLICY, "fields": [], "save_id": SAVE_ID},
+        {"base_revision": True, "policy": POLICY, "fields": [], "save_id": SAVE_ID},
+        {"base_revision": 1, "policy": POLICY, "fields": [], "save_id": SAVE_ID, "saved": True},
+        {"base_revision": 1, "fields": [], "save_id": SAVE_ID},
+        {"base_revision": 1, "policy": POLICY, "fields": [], "save_id": "short"},
+        {"base_revision": 1, "policy": POLICY, "fields": []},  # no save_id
     ],
 )
 def test_request_bodies_are_strict(client, template, body):
@@ -104,6 +119,39 @@ def test_a_storage_failure_answers_503_and_never_claims_the_outcome(
     assert response.status_code == 503
     assert "may or may not have been saved, so reload before retrying" in response.json()["detail"]
     assert client.get(f"/api/templates/{template['id']}").json()["revision"] == 1
+
+
+def test_a_storage_failure_on_a_read_says_to_reload(client, template, services, monkeypatch):
+    def failing(key):
+        raise StorageError("cannot read head.json: Input/output error")
+
+    monkeypatch.setattr(services.store, "get", failing)
+    response = client.get(f"/api/templates/{template['id']}")
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail.startswith("storage failed; reload and try again") and "saved" not in detail
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"host": "evil.example"},  # a name rebound to this machine
+        {"host": "192.168.1.20:8771"},  # reached over the network
+        {"origin": "https://evil.example"},  # another site's page
+        {"origin": "null"},
+    ],
+)
+def test_state_answers_only_loopback_requests_from_loopback_pages(client, template, headers):
+    response = client.get(f"/api/templates/{template['id']}", headers=headers)
+    assert response.status_code == 403 and "loopback" in response.json()["detail"]
+    upload = client.post("/api/sources", content=two_page_pdf(), headers=headers)
+    assert upload.status_code == 403
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8771", "localhost:8771", "[::1]:8771", "LOCALHOST"])
+def test_loopback_hosts_and_pages_are_answered(client, template, host):
+    headers = {"host": host, "origin": "http://localhost:8771"}
+    assert client.get(f"/api/templates/{template['id']}", headers=headers).status_code == 200
 
 
 def test_uploads_are_bounded_and_must_be_readable(client, monkeypatch):
@@ -152,3 +200,55 @@ def test_state_is_configured_only_on_local_disk_outside_the_repository(tmp_path)
     assert api.services_from_environment({**local, "VERCEL": "1"}, ROOT) is None
     with pytest.raises(RuntimeError, match="outside the repository"):
         api.services_from_environment({api.STATE_DIR_ENV: str(ROOT / "state")}, ROOT)
+    (tmp_path / "real").mkdir(mode=0o700)
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    with pytest.raises(StorageError, match="not a link"):
+        api.services_from_environment({api.STATE_DIR_ENV: str(tmp_path / "link")}, ROOT)
+
+
+def gate(services, method, path, receive, host="127.0.0.1"):
+    """Calls StateGate directly, so a test sees exactly what it reads and sends."""
+    reached, sent = [], []
+
+    async def app_behind(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(b"host", host.encode()), (b"content-length", b"9999999")],
+        "app": SimpleNamespace(state=SimpleNamespace(services=services)),
+    }
+    asyncio.run(api.StateGate(app_behind)(scope, receive, send))
+    return reached, sent
+
+
+async def never_read():
+    raise AssertionError("the gate read the body")
+
+
+@pytest.mark.parametrize(
+    "configured, host, status",
+    [(False, "127.0.0.1", 503), (True, "evil.example", 403), (True, "127.0.0.1", 413)],
+)
+def test_the_gate_answers_without_reading_the_body(services, configured, host, status):
+    url = f"/api/templates/{'0' * 32}"
+    reached, sent = gate(services if configured else None, "PUT", url, never_read, host)
+    assert reached == [] and sent[0]["status"] == status
+
+
+def test_a_client_that_leaves_mid_body_gets_no_answer_and_reaches_nothing(services, monkeypatch):
+    monkeypatch.setattr(api, "MAX_JSON_BYTES", 10**8)  # the declared length is within bounds
+    messages = iter([{"type": "http.request", "body": b"{", "more_body": True}])
+
+    async def receive():
+        return next(messages, {"type": "http.disconnect"})
+
+    reached, sent = gate(services, "PUT", f"/api/templates/{'0' * 32}", receive)
+    assert reached == [] and sent == []

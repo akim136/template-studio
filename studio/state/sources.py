@@ -5,7 +5,8 @@ Nothing is stored for a file the analysis service cannot read. A sealed source i
 absent, and its bytes are re-hashed whenever they are read back, so a template's source identity
 cannot drift. Page sizes are the visible area as PDFium renders it, the frame fields are placed in.
 A page's rotation is recorded only when pypdf and PDFium both read it and agree; otherwise it is
-unknown (None), and no field can be placed on that page.
+unknown (None), and no field can be placed on that page; the page is flagged, without making the
+inventory incomplete.
 """
 
 from __future__ import annotations
@@ -15,11 +16,18 @@ import json
 import re
 from dataclasses import asdict
 
-from studio.services.analysis import MAX_SOURCE_BYTES, AnalysisError, analyze, oversize_message
+from studio.services.analysis import (
+    MAX_SOURCE_BYTES,
+    AnalysisError,
+    PageFlag,
+    analyze,
+    oversize_message,
+)
 from studio.services.candidates import extract_candidates
 from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
+UNKNOWN_ROTATION = "the page's rotation could not be confirmed, so no field can be placed on it"
 
 
 class SourceError(ValueError):
@@ -54,11 +62,12 @@ def seal(store: ObjectStore, data: bytes) -> dict:
                 "rotation": page.rotation if page.rotation == rendered_rotation else None,
             }
         )
+    unknown = [PageFlag(p["page"], UNKNOWN_ROTATION, False) for p in pages if p["rotation"] is None]
     record = {
         "sha256": result.source_sha256,
         "size": len(data),
         "inventory": result.inventory,
-        "flags": [asdict(flag) for flag in result.flags],
+        "flags": [asdict(flag) for flag in [*result.flags, *unknown]],
         "pages": pages,
     }
     pdf_key, record_key = _keys(result.source_sha256)

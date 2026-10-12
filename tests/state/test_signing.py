@@ -34,6 +34,7 @@ class Scripted:
         self.payloads: list[dict] = []
         self.remote: dict[str, Found] = {}
         self.during_create = None  # runs inside the create call, as a concurrent request would
+        self.during_find = None  # runs inside a status lookup, before it reads what is held
 
     def create(self, operation_id: str, payload: dict) -> str:
         self.calls.append(operation_id)
@@ -54,6 +55,9 @@ class Scripted:
         return f"remote-{operation_id}"
 
     def find(self, operation_id: str) -> Found | None:
+        if self.during_find is not None:
+            during, self.during_find = self.during_find, None
+            during()
         if self.find_outcome == "error":
             raise OutcomeUnknown("the provider is unreachable")
         return self.remote.get(operation_id)
@@ -74,6 +78,11 @@ def scripted(services, clock, **outcomes):
 
 def create(operations, approved):
     return operations.create(approved["id"], approved["revision"], approved["binding"])
+
+
+def orphan(services, approved, operation_id):
+    stored = services.store.get(f"templates/{approved['id']}/orphans/{operation_id}.json")
+    return None if stored is None else json.loads(stored.data)
 
 
 def test_create_needs_the_current_approved_revision(services, source):
@@ -255,6 +264,77 @@ def test_a_create_reported_after_its_operation_was_replaced_says_so(services, cl
     first = create(operations, approved)
     assert first["state"] == NEEDS_STATUS_CHECK and "replaced" in first["note"]
     assert operations.get(approved["id"])["id"] != first["id"]
+    assert orphan(services, approved, first["id"]) == first  # kept, not only returned
+
+
+def test_a_create_the_provider_holds_wins_over_a_concurrent_check_that_missed_it(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+    create(operations, approved)
+    clock.advance(minutes=5)
+
+    def check_that_does_not_see_it_yet():
+        held = dict(adapter.remote)
+        adapter.remote.clear()
+        assert operations.check_status(approved["id"])["state"] == FAILED
+        adapter.remote.update(held)
+
+    adapter.during_find = check_that_does_not_see_it_yet
+    checked = operations.check_status(approved["id"])
+    assert checked["state"] == CREATED and operations.get(approved["id"]) == checked
+    with pytest.raises(Conflict, match="already created"):  # no second, duplicate create
+        create(operations, approved)
+
+
+def test_a_create_found_after_its_operation_was_replaced_is_kept_for_resolution(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+    first = create(operations, approved)
+    clock.advance(minutes=5)
+
+    def replaced():
+        held = dict(adapter.remote)
+        adapter.remote.clear()
+        operations.check_status(approved["id"])  # FAILED: nothing seen yet
+        adapter.create_outcome = "ok"
+        create(operations, approved)  # a second operation takes the slot
+        adapter.remote.update(held)
+
+    adapter.during_find = replaced
+    checked = operations.check_status(approved["id"])
+    assert checked["id"] == first["id"] and "replaced" in checked["note"]
+    assert orphan(services, approved, first["id"]) == checked
+    assert operations.get(approved["id"])["state"] == CREATED  # the second operation stands
+
+
+def test_a_status_check_that_changes_nothing_writes_nothing(services, clock, approved):
+    operations, _ = scripted(services, clock, create="timeout-after", find="error")
+    create(operations, approved)
+    first = operations.check_status(approved["id"])
+    key = f"templates/{approved['id']}/operation.json"
+    etag = services.store.get(key).etag
+    clock.advance(minutes=1)
+    assert operations.check_status(approved["id"]) == first
+    assert services.store.get(key).etag == etag
+
+
+def test_status_checks_racing_a_reported_create_cannot_wear_it_out(
+    services, clock, approved, monkeypatch
+):
+    operations, _ = scripted(services, clock, find="error")
+    real = services.store.replace
+
+    def check_first(key, data, etag):
+        if b'"VERIFYING"' in data:  # each time the create is recorded, a check lands first
+            clock.advance(seconds=1)
+            operations.check_status(approved["id"])
+        return real(key, data, etag)
+
+    monkeypatch.setattr(services.store, "replace", check_first)
+    reported = create(operations, approved)
+    assert reported["reported_created"] and reported["state"] == NEEDS_STATUS_CHECK
 
 
 class LandsThenFails:

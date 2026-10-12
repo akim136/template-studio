@@ -58,9 +58,23 @@ def test_a_stale_save_is_refused_with_the_current_revision(services, template, s
     assert services.templates.get(template["id"]) == saved
 
 
-def test_a_retried_save_that_already_landed_is_not_a_conflict(services, template, saved):
-    again, changed = services.templates.save(template["id"], 1, POLICY, [field()])
-    assert again == saved and not changed
+def test_a_retried_save_is_recognized_only_by_its_save_id(services, template):
+    save = services.templates.save
+    first, changed = save(template["id"], 1, POLICY, [field()], save_id="tab-a-0001")
+    assert changed and first["revision"] == 2
+    again, changed = save(template["id"], 1, POLICY, [field()], save_id="tab-a-0001")
+    assert again == first and not changed  # the same request, retried after it landed
+    for other in ("tab-b-0001", None):  # another editor with the same content is stale
+        with pytest.raises(Conflict):
+            save(template["id"], 1, POLICY, [field()], save_id=other)
+    with pytest.raises(Conflict):  # the same id with other content is not a retry either
+        save(template["id"], 1, POLICY, [field(x=80.0)], save_id="tab-a-0001")
+
+
+@pytest.mark.parametrize("save_id", ["short", "x" * 65, "has space", 7])
+def test_a_save_id_is_8_to_64_letters_digits_dashes_or_underscores(services, template, save_id):
+    with pytest.raises(Invalid, match="save_id"):
+        services.templates.save(template["id"], 1, POLICY, [field()], save_id=save_id)
 
 
 def test_any_save_makes_a_new_revision_and_clears_sign_offs_even_unchanged(services, saved):
