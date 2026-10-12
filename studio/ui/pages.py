@@ -9,6 +9,9 @@ Every page answers like the state API (studio/state/api.py) and shows only what 
 
 Pages carry a Content-Security-Policy that allows only this origin's scripts and styles, plus the
 R2 host for a direct upload. Values typed by people (titles, sponsor names) are escaped by Jinja.
+
+The tab icon is the Homebase mark (static/favicon.*), served at /favicon.ico as well, without a
+session, like the rest of static/.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from urllib.parse import urlencode
 import jinja2
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.requests import cookie_parser
 
@@ -54,6 +57,12 @@ environment = jinja2.Environment(
 )
 templates = Jinja2Templates(env=environment)
 pages = APIRouter()
+
+
+@pages.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    """The Homebase mark, where browsers and other tools look for a site's icon."""
+    return FileResponse(ROOT / "static" / "favicon.ico", media_type="image/x-icon")
 
 
 def mode_label(countersigner: bool) -> str:

@@ -54,6 +54,7 @@ AUTH_ROUTES = {
 }
 PAGE_ROUTES = {
     ("GET", "/"),
+    ("GET", "/favicon.ico"),
     ("GET", "/new"),
     ("GET", "/templates/{template_id}"),
     ("GET", "/templates/{template_id}/analyzing"),
