@@ -9,6 +9,9 @@ There is no PDF processing, model client, authentication, storage or signing ada
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and
 [`docs/design-import.md`](docs/design-import.md) for the design-import map.
 
+Hosting: a private GitHub repository and a Vercel project. Vercel Authentication protects every
+deployment, and no one else has been invited yet.
+
 ## Run locally
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.

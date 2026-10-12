@@ -1,10 +1,10 @@
 # Homebase Template Studio: project guide
 
 **Revision 1.0.14-repo.1 · October 11, 2026 · Owner: Alex Kim**
-**Status:** P0 foundation (PR1) is a local PR-ready diff awaiting Alex's review.
+**Status:** P0 foundation (PR1) is draft PR #1 on the private remote, awaiting Alex's review.
 - Analysis is NOT_IMPLEMENTED.
-- Vercel access is NOT_APPLIED.
-- There is no remote, deployment or inference, and no phase has advanced.
+- Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
+- Nothing is merged, there is no inference, and no phase has advanced.
 
 This is the canonical guide for this repository. It condenses the private kickoff (guide 1.0.14, PR plan, implementation acceptance, quality and model gate, access runbook) into public-safe requirements.
 
@@ -29,7 +29,7 @@ Precedence, highest first:
 | D1 | A parallel internal app. The existing Claude skill, upload host, MCP, signing account, production infrastructure and other repositories stay unchanged. No cutover is required. |
 | D2 | The stack is Python 3.13, uv, FastAPI, Jinja/HTML/CSS and limited browser JavaScript. Excluded: a Node or Next.js backend, a Python-in-browser runtime, a framework switch, and any shared cross-project platform. |
 | D3 | Keep R2 behind a narrow, independently authenticated Cloudflare adapter. Keep a signing adapter that is simulated by default. |
-| D4 | Access uses Vercel Authentication with All Deployments protection and named access for seven people. Its status is NOT_APPLIED (section 6). |
+| D4 | Access uses Vercel Authentication with All Deployments protection and named access for seven people. Protection is applied, and named invitations are NOT_APPLIED (section 6). |
 | D5 | Seven PR-sized stages with one active phase. No automatic merge or phase advancement (section 3). |
 | D6 | The UI and the evaluation runner call the **same** Python analysis service. |
 
@@ -37,7 +37,7 @@ Precedence, highest first:
 
 | Field | Value |
 |---|---|
-| Repository | Fresh local Git repository created for this isolated session. The kickoff packet and design archive sit outside the Git root, unchanged. No remote. |
+| Repository | Fresh local Git repository created for this isolated session. The kickoff packet and design archive sit outside the Git root, unchanged. Remote: private GitHub repository `akim136/template-studio`, created at Alex's request on October 11, 2026. |
 | Isolation | Independent of earlier Template Studio checkouts and another parallel session. Nothing was copied from them or changed in them. |
 | Branches | `main` holds the bootstrap commit, and `chore/studio-foundation` holds PR1. |
 | Local preview | `127.0.0.1:8773`. The preferred ports 8771 and 8772 were held by other sessions. |
@@ -139,7 +139,7 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
   - A working editor or valid JSON does not establish model quality.
 - **Live inference** is an explicit, authorized, budgeted run. CI never triggers it.
 
-## 6. Access (decided, NOT_APPLIED)
+## 6. Access (protection applied, invitations NOT_APPLIED)
 
 - **Mechanism:** Vercel Authentication with All Deployments protection, and named deployment access for the seven people in the private roster. The roster stays out of Git, client code and fixtures.
 - **Not allowed:** a custom login, an email-domain gate, a bearer bypass link, a shared password, an automatic plan upgrade, or an assumed application reviewer identity.
@@ -150,7 +150,13 @@ One branch and diff per stage. Advancing a phase is a separate `scope_update` ch
   - verify the actual team, project, plan and effective access;
   - test signed-out, listed, non-listed, direct-API and alternate-URL access;
   - record only what was observed.
-- **PR1 status:** team, project and plan are unverified. Protection and invitations are NOT_APPLIED.
+- **PR1 status (observed October 11, 2026):**
+  - Vercel project `template-studio` on a Hobby-plan team, linked to the GitHub repository, with production branch `main`.
+  - Vercel Authentication covers all deployments (`ssoProtection.deploymentType: all`, read back through the API). There is no password, trusted-IP or automation bypass, and no share link was created.
+  - Signed out, the generated URL, both production aliases and the branch alias redirect `/`, `/healthz` and `/openapi.json` to Vercel's login with no app output.
+  - The first deployment became production from the PR1 branch head, because the project had no production deployment yet. The next push to `main` replaces it.
+  - Named invitations are NOT_APPLIED. Hobby allows one external collaborator, and Alex chose none for now.
+  - A signed-in check by Alex is pending, as is the non-listed-user test.
 
 ## 7. Design source (reference only)
 
@@ -210,8 +216,8 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 | Phase | P0 (PR1). Local PR-ready diff. Not accepted. |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
 | Analysis | NOT_IMPLEMENTED |
-| Vercel access | NOT_APPLIED |
-| Hosted CI | NOT RUN, because there is no remote. |
+| Vercel access | Protection applied to all deployments. Named invitations NOT_APPLIED (section 6). |
+| Hosted CI | Passed on draft PR #1 at `033c371`, generic rules only. |
 | Private inputs | NOT RUN, because they were not supplied. |
 | Inference | None. $0. |
 | Next | Alex reviews PR1, then an Alex-reviewed `scope_update` to P1. |
@@ -222,7 +228,7 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 - The private-PDF location for this workspace, and evaluator-only storage for the baseline.
 - The PDF library and its license (for example, AGPL versus commercial) before parser adoption, plus a native-dependency smoke test on the deployment runtime.
 - The model route, provider restriction and spend cap. Reference adjudication and tolerances.
-- The remote owner, visibility and timing.
+- Named access for seven people: a Pro upgrade or another route, since Hobby allows one external collaborator.
 - The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
 - Whether to send the design (4) conflicts back to Design, or only reject them at import.
 - Whether `pyproject.toml`, `tests/conftest.py` and `tests/test_repo_contract.py` become scope files, or CI runs the scope tests with a fixed configuration (section 8).
