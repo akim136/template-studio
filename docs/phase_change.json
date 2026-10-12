@@ -1,0 +1,6 @@
+{
+  "phase": "P0",
+  "kind": "bootstrap",
+  "features": ["F-P0-foundation"],
+  "summary": "PR1 foundation. main has no phase policy, so Alex's manual review is the gate."
+}
