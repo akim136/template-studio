@@ -6,9 +6,16 @@ import pathlib
 
 import pytest
 from pypdf import PageObject
+from pypdf.errors import DependencyError
 
-from studio.services.analysis import INFERENCE_NOT_RUN, AnalysisError, analyze
-from tests.analysis.pdf_factory import make_pdf
+from studio.services import analysis as analysis_module
+from studio.services.analysis import (
+    INFERENCE_NOT_RUN,
+    NO_TEXT_REASON,
+    AnalysisError,
+    analyze,
+)
+from tests.analysis.pdf_factory import encrypt, make_pdf
 
 
 def test_inventory_records_every_page_from_the_source_bytes():
@@ -56,6 +63,8 @@ def test_a_failed_page_is_recorded_not_dropped(monkeypatch):
 
     assert [p.status for p in result.pages] == ["text", "error", "text"]
     assert result.pages[1].reason == "ValueError: synthetic page failure"
+    failed = result.pages[1]
+    assert (failed.width_pt, failed.height_pt, failed.rotation) == (612.0, 792.0, 0)
     assert result.inventory == "INCOMPLETE"
     assert "page(s) [2] failed extraction" in result.diagnostics
 
@@ -83,3 +92,47 @@ def test_the_service_opens_no_files(monkeypatch):
         monkeypatch.setattr(target, name, refuse)
     monkeypatch.setattr(pathlib.Path, "open", refuse)
     assert analyze(make_pdf(["isolated"])).inventory == "COMPLETE"
+
+
+@pytest.mark.parametrize(("real", "declared"), [(5, 3), (3, 5)])
+def test_an_encrypted_pdf_is_inventoried_from_its_page_tree(real, declared):
+    """pypdf sizes an encrypted file's pages from /Count, so the inventory must not trust it."""
+    texts = [f"page {n}" for n in range(1, real + 1)]
+    source = encrypt(make_pdf(texts).replace(b"/Count %d" % real, b"/Count %d" % declared))
+    result = analyze(source)
+    assert (result.page_count, result.declared_page_count) == (real, declared)
+    assert [p.text for p in result.pages] == texts
+    assert result.inventory == "INCOMPLETE"
+
+
+def test_an_encrypted_pdf_with_an_empty_user_password_is_inventoried():
+    result = analyze(encrypt(make_pdf(["one", "two"])))
+    assert (result.page_count, result.inventory) == (2, "COMPLETE")
+
+
+@pytest.mark.parametrize(
+    ("raised", "message"),
+    [
+        (DependencyError("cryptography>=3.1 is required for AES algorithm"), "unsupported"),
+        (KeyError("/Root"), "unreadable PDF: KeyError"),
+        (NotImplementedError("crypt filter"), "unreadable PDF: NotImplementedError"),
+    ],
+)
+def test_any_parser_failure_is_an_analysis_error_that_names_the_source(
+    monkeypatch, raised, message
+):
+    def reader(*args, **kwargs):
+        raise raised
+
+    monkeypatch.setattr(analysis_module, "PdfReader", reader)
+    source = make_pdf(["x"])
+    with pytest.raises(AnalysisError, match=message) as caught:
+        analyze(source)
+    record = caught.value.to_dict()
+    assert record["status"] == "FAILED"
+    assert record["source_sha256"] == hashlib.sha256(source).hexdigest()
+
+
+def test_a_page_without_text_records_why():
+    page = analyze(make_pdf([""])).pages[0]
+    assert (page.status, page.reason) == ("no_text", NO_TEXT_REASON)

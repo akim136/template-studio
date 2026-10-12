@@ -14,20 +14,36 @@ import io
 import logging
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 
 from pypdf import PdfReader
-from pypdf.errors import FileNotDecryptedError, PyPdfError
+from pypdf.errors import DependencyError, FileNotDecryptedError, PyPdfError
 
 INFERENCE_NOT_RUN = "NOT_RUN: model inference is not authorized"
 IMAGES_NOT_RUN = "NOT_RUN: no page rasterizer has been adopted"
+NO_TEXT_REASON = "no extractable text; page images are NOT_RUN"
 # A mechanics signal only. An underscore run is not a templated field.
 UNDERSCORE_RUN = re.compile(r"_{3,}")
 
 
 class AnalysisError(Exception):
-    """The source cannot be analyzed at all, for example unreadable or encrypted."""
+    """The source cannot be analyzed at all. The failure record still names the source."""
+
+    def __init__(self, message: str, source: bytes, diagnostics: list[str]) -> None:
+        super().__init__(message)
+        self.source_sha256 = hashlib.sha256(source).hexdigest()
+        self.source_bytes = len(source)
+        self.diagnostics = diagnostics
+
+    def to_dict(self) -> dict:
+        return {
+            "status": "FAILED",
+            "error": str(self),
+            "source_sha256": self.source_sha256,
+            "source_bytes": self.source_bytes,
+            "diagnostics": self.diagnostics,
+        }
 
 
 @dataclass(frozen=True)
@@ -84,16 +100,33 @@ def _parser_diagnostics():
 
 
 def _page_record(number: int, page) -> PageRecord:
+    # One bad page must not drop the rest of the inventory, and a text failure keeps geometry.
+    width = height = rotation = None
     try:
         box = page.mediabox
         width, height, rotation = float(box.width), float(box.height), int(page.rotation)
         text = page.extract_text() or ""
-    except Exception as error:  # one bad page must not drop the rest of the inventory
+    except Exception as error:
         reason = f"{type(error).__name__}: {error}"
-        return PageRecord(number, "error", None, None, None, "", 0, reason)
-    status = "text" if text.strip() else "no_text"
+        return PageRecord(number, "error", width, height, rotation, "", 0, reason)
+    if not text.strip():
+        return PageRecord(number, "no_text", width, height, rotation, text, 0, NO_TEXT_REASON)
     runs = len(UNDERSCORE_RUN.findall(text))
-    return PageRecord(number, status, width, height, rotation, text, runs)
+    return PageRecord(number, "text", width, height, rotation, text, runs)
+
+
+def _page_tree(reader: PdfReader) -> list:
+    """Every leaf of the page tree.
+
+    For an encrypted file pypdf sizes ``reader.pages`` from /Count, so the inventory reads the
+    flattened tree, which pypdf builds on first page access, instead.
+    """
+    if reader.flattened_pages is None:
+        with suppress(IndexError):  # an empty tree has no page 0
+            reader.get_page(0)
+    if reader.flattened_pages is None:
+        raise PyPdfError("the page tree could not be read")
+    return list(reader.flattened_pages)
 
 
 def _declared_count(reader: PdfReader) -> int | None:
@@ -103,19 +136,27 @@ def _declared_count(reader: PdfReader) -> int | None:
         return None
 
 
+def _read(source: bytes) -> tuple[list[PageRecord], int | None]:
+    reader = PdfReader(io.BytesIO(source), strict=False)
+    if reader.is_encrypted and not reader.decrypt(""):
+        raise FileNotDecryptedError("a password is required")
+    pages = [_page_record(n, page) for n, page in enumerate(_page_tree(reader), start=1)]
+    return pages, _declared_count(reader)
+
+
 def analyze(source: bytes) -> AnalysisResult:
     """Inventory every page of a PDF given as bytes."""
     with _parser_diagnostics() as diagnostics:
         try:
-            reader = PdfReader(io.BytesIO(source), strict=False)
-            if reader.is_encrypted and not reader.decrypt(""):
-                raise AnalysisError("the PDF is encrypted")
-            pages = [_page_record(n, page) for n, page in enumerate(reader.pages, start=1)]
-            declared = _declared_count(reader)
+            pages, declared = _read(source)
         except FileNotDecryptedError as error:
-            raise AnalysisError("the PDF is encrypted") from error
-        except PyPdfError as error:
-            raise AnalysisError(f"unreadable PDF: {error}") from error
+            raise AnalysisError("the PDF needs a password", source, diagnostics) from error
+        except DependencyError as error:
+            message = f"unsupported encryption, needs a dependency not adopted: {error}"
+            raise AnalysisError(message, source, diagnostics) from error
+        except Exception as error:  # any parser failure is a FAILED record, never a traceback
+            message = f"unreadable PDF: {type(error).__name__}: {error}"
+            raise AnalysisError(message, source, diagnostics) from error
 
     findings = list(diagnostics)
     if declared != len(pages):

@@ -1,5 +1,7 @@
 """Build small synthetic PDFs at test time. No PDF fixture is committed."""
 
+import io
+
 
 def _escape(text: str) -> bytes:
     return (
@@ -40,3 +42,14 @@ def make_pdf(texts: list[str], *, size=(612, 792), bad_startxref: bool = False) 
     startxref = xref + 5 if bad_startxref else xref
     out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (count, startxref)
     return bytes(out)
+
+
+def encrypt(data: bytes, algorithm: str = "RC4-128") -> bytes:
+    """Encrypt with an empty user password, as owner-restricted documents often are."""
+    from pypdf import PdfWriter
+
+    writer = PdfWriter(clone_from=io.BytesIO(data))
+    writer.encrypt(user_password="", owner_password="owner", algorithm=algorithm)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()

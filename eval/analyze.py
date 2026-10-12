@@ -26,7 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.redirect_stdout(sys.stderr):
         try:
             record, code = analyze(args.source.read_bytes()).to_dict(), 0
-        except (OSError, AnalysisError) as error:
+        except AnalysisError as error:
+            record, code = error.to_dict(), 1
+        except OSError as error:
             record, code = {"status": "FAILED", "error": str(error)}, 1
     for line in record.get("diagnostics", []):
         print(f"diagnostic: {line}", file=sys.stderr)

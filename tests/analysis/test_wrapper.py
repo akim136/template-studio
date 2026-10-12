@@ -1,8 +1,11 @@
 import ast
+import hashlib
 import json
 import pathlib
 import subprocess
 import sys
+
+from pypdf.errors import DependencyError
 
 import eval.analyze as wrapper
 from studio.services import analysis
@@ -112,3 +115,20 @@ def test_the_wrapper_has_no_parser_of_its_own():
             )
         }
         assert not any(name and name.split(".")[0] == "pypdf" for name in imported), path
+
+
+def test_an_unsupported_dependency_is_failed_json_that_names_the_source(
+    tmp_path, monkeypatch, capsys
+):
+    """An AES-256 source needs a crypto package that has not been adopted."""
+    source = tmp_path / "source.pdf"
+    source.write_bytes(make_pdf(["locked"]))
+
+    def reader(*args, **kwargs):
+        raise DependencyError("cryptography>=3.1 is required for AES algorithm")
+
+    monkeypatch.setattr(analysis, "PdfReader", reader)
+    assert wrapper.main([str(source)]) == 1
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "FAILED" and "unsupported" in record["error"]
+    assert record["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
