@@ -31,11 +31,19 @@ STATE_ROUTES = {
 }
 
 
+def exposed_routes() -> set[tuple[str, str]]:
+    exposed = set()
+    for route in app.routes:
+        if hasattr(route, "path"):
+            exposed |= {(method, route.path) for method in route.methods}
+        else:  # FastAPI 0.143 includes a router lazily, as one route with no path of its own
+            assert route.original_router is state_router
+            exposed |= {(m, r.path) for r in state_router.routes for m in r.methods}
+    return exposed
+
+
 def test_no_other_routes_are_exposed() -> None:
-    assert len(app.routes) == 2  # /healthz and the included state router
-    assert {route.path for route in app.routes if hasattr(route, "path")} == {"/healthz"}
-    exposed = {(method, route.path) for route in state_router.routes for method in route.methods}
-    assert exposed == STATE_ROUTES
+    assert exposed_routes() == STATE_ROUTES | {("GET", "/healthz")}
     client = TestClient(app)
     for path in ("/", "/docs", "/redoc", "/openapi.json", "/api/analyze"):
         assert client.get(path).status_code == 404, path

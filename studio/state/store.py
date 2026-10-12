@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -68,9 +69,11 @@ def check_key(key: str) -> str:
 class LocalObjectStore:
     """A directory on local disk, owner-only.
 
-    Each write goes to a temporary file that is flushed, synced and renamed into place, so a reader
-    sees the old object or the new one, never part of one. A lock file serializes conditional
-    writes across threads and processes on this machine.
+    The directory must be a real directory (not a link), owned by this user and closed to
+    everyone else, or the store refuses to open. Each write goes to a temporary file that is
+    flushed, synced and renamed into place, so a reader sees the old object or the new one, never
+    part of one; every folder a write creates is synced into its parent. A lock file serializes
+    conditional writes across threads and processes on this machine.
     """
 
     def __init__(self, root: Path) -> None:
@@ -78,8 +81,15 @@ class LocalObjectStore:
         self._lock = threading.Lock()
         try:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            info = self.root.lstat()
         except OSError as error:
             raise StorageError(f"cannot create the state directory: {error.strerror}") from None
+        if not stat.S_ISDIR(info.st_mode):
+            raise StorageError("the state directory must be a real directory, not a link")
+        if info.st_uid != os.getuid():
+            raise StorageError("the state directory must belong to this user")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise StorageError("the state directory must be owner-only (mode 700)")
 
     def get(self, key: str) -> Stored | None:
         try:
@@ -118,7 +128,7 @@ class LocalObjectStore:
         path = self.root / check_key(key)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._make_folders(path.parent)
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 with os.fdopen(descriptor, "wb") as out:
@@ -128,11 +138,24 @@ class LocalObjectStore:
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
-            directory = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            _sync_folder(path.parent)
         except OSError as error:
             raise StorageError(f"cannot write {key}: {error.strerror}") from None
         return hashlib.sha256(data).hexdigest()
+
+    def _make_folders(self, folder: Path) -> None:
+        missing = []
+        while folder != self.root and not folder.is_dir():
+            missing.append(folder)
+            folder = folder.parent
+        for created in reversed(missing):
+            created.mkdir(mode=0o700, exist_ok=True)
+            _sync_folder(created.parent)
+
+
+def _sync_folder(folder: Path) -> None:
+    descriptor = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

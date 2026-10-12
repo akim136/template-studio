@@ -5,6 +5,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 
+from studio.services.candidates import PageCandidates
 from studio.state import sources
 from studio.state.store import StorageError
 from tests.state.helpers import two_page_pdf
@@ -62,3 +63,23 @@ def test_altered_source_bytes_are_detected_on_every_read(services, tmp_path):
 def test_a_source_is_named_only_by_a_hash(services, name):
     with pytest.raises(sources.SourceError):
         sources.load(services.store, name)
+
+
+def test_a_page_whose_rotation_the_two_readers_disagree_on_is_recorded_as_unknown(
+    services, monkeypatch
+):
+    def turned(data, pages):
+        return [PageCandidates(n, [], width_pt=612.0, height_pt=792.0, rotation=90) for n in (1, 2)]
+
+    monkeypatch.setattr(sources, "extract_candidates", turned)  # pypdf reads rotation 0
+    record = sources.seal(services.store, two_page_pdf())
+    assert [page["rotation"] for page in record["pages"]] == [None, None]
+
+
+def test_a_rotated_page_is_recorded_in_degrees_when_both_readers_agree(services):
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(two_page_pdf())))
+    writer.pages[0].rotate(90)
+    out = io.BytesIO()
+    writer.write(out)
+    record = sources.seal(services.store, out.getvalue())
+    assert [page["rotation"] for page in record["pages"]] == [90, 0]

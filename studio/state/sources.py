@@ -4,6 +4,8 @@ are checked against.
 Nothing is stored for a file the analysis service cannot read. A sealed source is written only if
 absent, and its bytes are re-hashed whenever they are read back, so a template's source identity
 cannot drift. Page sizes are the visible area as PDFium renders it, the frame fields are placed in.
+A page's rotation is recorded only when pypdf and PDFium both read it and agree; otherwise it is
+unknown (None), and no field can be placed on that page.
 """
 
 from __future__ import annotations
@@ -42,13 +44,14 @@ def seal(store: ObjectStore, data: bytes) -> dict:
     for page in result.pages:
         visible = measured.get(page.page)
         size = visible and visible.width_pt and visible.height_pt  # 0 when PDFium could not
+        rendered_rotation = visible.rotation if size else None
         pages.append(
             {
                 "document_index": 0,
                 "page": page.page,
                 "width": visible.width_pt if size else None,
                 "height": visible.height_pt if size else None,
-                "rotation": page.rotation,
+                "rotation": page.rotation if page.rotation == rendered_rotation else None,
             }
         )
     record = {

@@ -15,6 +15,11 @@ An operation is recorded before the adapter is called, and moves through these s
   cannot be read back). The operation keeps its ID, and only a status check is offered.
 
 A template has at most one operation that is not FAILED, so a create is never repeated blindly.
+
+A create the adapter reports is written onto the stored operation even if a concurrent status
+check moved it meanwhile, so a reported create is never lost or left FAILED. If recording the
+operation fails before the adapter is called, the operation is marked FAILED (not attempted) where
+it landed; if recording the outcome fails after the call, the error says to check its status.
 """
 
 from __future__ import annotations
@@ -38,6 +43,11 @@ FAILED, NEEDS_STATUS_CHECK = "FAILED", "NEEDS_STATUS_CHECK"
 # Not finding a create counts as "nothing was created" only after this long. It must exceed any
 # real adapter's create timeout, or a slow create could land after it was declared failed.
 GRACE = timedelta(minutes=2)
+REPORT_ATTEMPTS = 3  # status checks that can race one reported create
+REPLACED = (
+    "the create was reported after this operation was replaced by another; the provider may "
+    "hold both, so resolve by hand"
+)
 
 
 class Refused(Exception):
@@ -144,19 +154,23 @@ class Operations:
         except PreconditionFailed:
             reason = "another create started: check its status"
             raise Conflict(reason, self.get(template_id)) from None
+        except StorageError:
+            self._not_attempted(key, operation)
+            raise
         try:
             external_id = self.adapter.create(operation["id"], payload)
         except Refused as error:
-            return self._move(key, operation, etag, FAILED, note=f"refused: {error}")[0]
+            return self._after_call(key, operation, etag, FAILED, note=f"refused: {error}")
         except Exception as error:  # a timeout or any error: the create may have happened
             note = f"create outcome unknown ({type(error).__name__})"
-            return self._move(key, operation, etag, NEEDS_STATUS_CHECK, note=note)[0]
-        operation, etag = self._move(
-            key, operation, etag, VERIFYING, external_id=external_id, reported_created=True
-        )
-        if etag is None:
-            return operation  # a status check moved it first; its state stands
-        return self._settle(key, operation, etag)
+            return self._after_call(key, operation, etag, NEEDS_STATUS_CHECK, note=note)
+        try:
+            operation, etag = self._report(key, operation, etag, external_id)
+            if etag is None:
+                return operation  # created already, or replaced: its state stands
+            return self._settle(key, operation, etag)
+        except StorageError as error:
+            raise _unrecorded(error) from None
 
     def check_status(self, template_id: str) -> dict:
         self.templates.head(template_id)
@@ -190,6 +204,45 @@ class Operations:
         note = "nothing was created; a new create is allowed"
         return self._move(key, operation, etag, FAILED, note=note)[0]
 
+    def _report(
+        self, key: str, operation: dict, etag: str, external_id: str
+    ) -> tuple[dict, str | None]:
+        """Writes the adapter's report of a create onto the stored operation, whatever a
+        concurrent status check did to it meanwhile, unless it is already CREATED."""
+        current = operation
+        for _ in range(REPORT_ATTEMPTS):
+            if current["id"] != operation["id"]:
+                note = REPLACED
+                changes = {"external_id": external_id, "reported_created": True, "note": note}
+                return {**operation, **changes, "state": NEEDS_STATUS_CHECK}, None
+            if current["state"] == CREATED:
+                return current, None
+            reported = {**current, "external_id": external_id, "reported_created": True}
+            moved = {**reported, "state": VERIFYING, "note": "", "updated_at": self._now()}
+            try:
+                return moved, self.store.replace(key, canonical(moved), etag)
+            except PreconditionFailed:
+                stored = self.store.get(key)
+                current, etag = json.loads(stored.data), stored.etag
+        raise StorageError("the operation kept changing while its create was recorded")
+
+    def _after_call(self, key: str, operation: dict, etag: str, state: str, note: str) -> dict:
+        try:
+            return self._move(key, operation, etag, state, note=note)[0]
+        except StorageError as error:
+            raise _unrecorded(error) from None
+
+    def _not_attempted(self, key: str, operation: dict) -> None:
+        """The operation's record failed to write, but may have landed: mark it FAILED, since
+        the adapter was never called. Best effort: the caller reports the original error."""
+        try:
+            stored = self.store.get(key)
+            if stored is not None and json.loads(stored.data)["id"] == operation["id"]:
+                note = "not attempted: the operation could not be recorded"
+                self._move(key, operation, stored.etag, FAILED, note=note)
+        except (StorageError, ValueError, KeyError):
+            pass
+
     def _move(
         self, key: str, operation: dict, etag: str, state: str, **changes: object
     ) -> tuple[dict, str | None]:
@@ -205,3 +258,9 @@ class Operations:
 
     def _now(self) -> str:
         return self.clock().isoformat()
+
+
+def _unrecorded(error: StorageError) -> StorageError:
+    return StorageError(
+        f"the create was sent, but its outcome was not recorded; check its status ({error})"
+    )

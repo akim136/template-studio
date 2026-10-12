@@ -1,10 +1,14 @@
 import threading
+from dataclasses import replace
 
 import pytest
 
+from studio.services.analysis import PageFlag
+from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.store import StorageError
-from tests.state.helpers import POLICY, field
+from studio.state.templates import INCOMPLETE
+from tests.state.helpers import POLICY, field, two_page_pdf
 
 COUNTERSIGNED = {"countersigner": True, "required": [{"signer": 0, "type": "signature"}]}
 
@@ -59,10 +63,60 @@ def test_a_retried_save_that_already_landed_is_not_a_conflict(services, template
     assert again == saved and not changed
 
 
-def test_a_save_that_changes_nothing_keeps_the_revision_and_its_review(services, saved):
-    reviewed = services.templates.confirm_review(saved["id"], 2, saved["binding"])
+def test_any_save_makes_a_new_revision_and_clears_sign_offs_even_unchanged(services, saved):
+    services.templates.confirm_review(saved["id"], 2, saved["binding"])
+    services.templates.approve(saved["id"], 2, saved["binding"])
     again, changed = services.templates.save(saved["id"], 2, POLICY, [field()])
-    assert not changed and again["revision"] == 2 and again["review"] == reviewed["review"]
+    assert changed and again["revision"] == 3 and again["binding"] == saved["binding"]
+    assert again["review"] is None and again["approval"] is None
+    with pytest.raises(Conflict, match="stale"):  # the old sign-off cannot be reused
+        services.templates.approve(saved["id"], 2, saved["binding"])
+
+
+def test_a_save_that_races_a_sign_off_on_its_base_still_lands(services, saved, monkeypatch):
+    real, raced = services.store.replace, []
+
+    def replace(key, data, etag):
+        if key.endswith("head.json") and not raced:
+            raced.append(True)
+            services.templates.confirm_review(saved["id"], 2, saved["binding"])  # lands first
+        return real(key, data, etag)
+
+    monkeypatch.setattr(services.store, "replace", replace)
+    edited, changed = services.templates.save(saved["id"], 2, POLICY, [field(x=80.0)])
+    assert raced and changed and edited["revision"] == 3 and edited["review"] is None
+    assert services.templates.get(saved["id"]) == edited
+
+
+def race_before_sign_off(services, monkeypatch, competitor):
+    real, raced = services.store.replace, []
+
+    def replace(key, data, etag):
+        if key.endswith("head.json") and not raced:
+            raced.append(True)
+            competitor()
+        return real(key, data, etag)
+
+    monkeypatch.setattr(services.store, "replace", replace)
+
+
+def test_a_sign_off_that_loses_to_the_same_sign_off_returns_it(services, saved, monkeypatch):
+    def same():
+        services.templates.confirm_review(saved["id"], 2, saved["binding"])
+
+    race_before_sign_off(services, monkeypatch, same)
+    reviewed = services.templates.confirm_review(saved["id"], 2, saved["binding"])
+    assert reviewed == services.templates.get(saved["id"]) and reviewed["review"] is not None
+
+
+def test_a_sign_off_that_loses_to_a_save_is_stale(services, saved, monkeypatch):
+    def edit():
+        services.templates.save(saved["id"], 2, POLICY, [field(x=80.0)])
+
+    race_before_sign_off(services, monkeypatch, edit)
+    with pytest.raises(Conflict, match="stale") as refused:
+        services.templates.confirm_review(saved["id"], 2, saved["binding"])
+    assert refused.value.current["revision"] == 3 and refused.value.current["review"] is None
 
 
 @pytest.mark.parametrize(
@@ -145,3 +199,29 @@ def test_an_altered_revision_is_detected_on_read(services, saved, tmp_path):
         path.write_bytes(path.read_bytes().replace(b"72.0", b"73.0"))
     with pytest.raises(StorageError, match="missing or altered"):
         services.templates.get(saved["id"])
+
+
+def test_an_incomplete_source_blocks_review_approval_and_create_and_shows_its_flags(
+    services, monkeypatch
+):
+    real = sources.analyze
+
+    def incomplete(data):
+        flag = PageFlag(None, "synthetic gap", True)
+        return replace(real(data), inventory="INCOMPLETE", flags=[flag])
+
+    monkeypatch.setattr(sources, "analyze", incomplete)
+    record = sources.seal(services.store, two_page_pdf())
+    template = services.templates.create(record["sha256"], POLICY)
+    saved, _ = services.templates.save(template["id"], 1, POLICY, [field()])
+    assert saved["issues"] == [INCOMPLETE]
+    gap = {"page": None, "reason": "synthetic gap", "blocks_complete": True}
+    assert saved["source"] == {"inventory": "INCOMPLETE", "flags": [gap]}
+    with pytest.raises(Invalid, match="INCOMPLETE"):
+        services.templates.confirm_review(saved["id"], 2, saved["binding"])
+    with pytest.raises(Invalid, match="INCOMPLETE"):
+        services.operations.create(saved["id"], 2, saved["binding"])
+
+
+def test_a_complete_source_is_shown_with_its_non_blocking_flags(services, saved):
+    assert saved["source"] == {"inventory": "COMPLETE", "flags": []}

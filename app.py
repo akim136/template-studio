@@ -12,8 +12,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from studio.state.api import StateGate, services_from_environment
 from studio.state.api import router as state_router
-from studio.state.api import services_from_environment
 
 ANALYSIS_STATUS = "NOT_IMPLEMENTED"
 
@@ -25,6 +25,7 @@ app = FastAPI(
 )
 app.state.services = services_from_environment(os.environ, Path(__file__).resolve().parent)
 app.include_router(state_router)
+app.add_middleware(StateGate)
 
 
 @app.get("/healthz")

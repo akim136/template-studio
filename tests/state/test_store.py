@@ -1,6 +1,7 @@
 import os
 import stat
 import threading
+import time
 
 import pytest
 
@@ -75,3 +76,61 @@ def test_concurrent_replaces_of_one_version_have_exactly_one_winner(tmp_path):
         thread.join()
     assert len(winners) == 1
     assert store.get("k").data == str(winners[0]).encode()
+
+
+def test_a_state_directory_that_is_a_link_or_shared_is_refused(tmp_path):
+    real = tmp_path / "real"
+    LocalObjectStore(real)
+    (tmp_path / "link").symlink_to(real)
+    with pytest.raises(StorageError, match="not a link"):
+        LocalObjectStore(tmp_path / "link")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o750)
+    with pytest.raises(StorageError, match="owner-only"):
+        LocalObjectStore(shared)
+    (tmp_path / "file").write_bytes(b"")
+    with pytest.raises(StorageError):
+        LocalObjectStore(tmp_path / "file")
+
+
+def test_new_folders_are_synced_into_their_parents(tmp_path, monkeypatch):
+    store = LocalObjectStore(tmp_path / "s")
+    synced = []
+    real = store_module._sync_folder
+
+    def record(folder):
+        synced.append(folder)
+        real(folder)
+
+    monkeypatch.setattr(store_module, "_sync_folder", record)
+    store.put_new("a/b/c", b"x")
+    root = tmp_path / "s"
+    assert synced == [root, root / "a", root / "a" / "b"]  # each new entry, then the object
+
+
+def test_two_stores_on_one_folder_never_both_win(tmp_path, monkeypatch):
+    real = LocalObjectStore._write
+
+    def slow(self, key, data):  # widen the gap between the check and the write
+        time.sleep(0.02)
+        return real(self, key, data)
+
+    monkeypatch.setattr(LocalObjectStore, "_write", slow)
+    stores = [LocalObjectStore(tmp_path), LocalObjectStore(tmp_path)]  # as two processes would
+    start, winners = threading.Barrier(6), []
+
+    def attempt(index: int) -> None:
+        start.wait()
+        try:
+            stores[index % 2].put_new("k", str(index).encode())
+            winners.append(index)
+        except PreconditionFailed:
+            pass
+
+    threads = [threading.Thread(target=attempt, args=(index,)) for index in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(winners) == 1

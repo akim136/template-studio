@@ -4,6 +4,10 @@ The routes answer 503 unless saved state is configured, and only local disk can 
 deployment's disk is ephemeral, so on Vercel nothing is configured: saving there would be a false
 Saved. The upload route is the local stand-in for the direct R2 upload, which waits on Alex's R2
 decisions (guide §10).
+
+`StateGate` answers before FastAPI reads or validates a body: 503 when state is not configured,
+and 413 when a JSON body is over MAX_JSON_BYTES, by its declared length or by the bytes that
+arrive. The upload route bounds its own body at MAX_SOURCE_BYTES.
 """
 
 from __future__ import annotations
@@ -16,7 +20,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.datastructures import Headers
+from starlette.routing import Match
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
@@ -26,6 +34,9 @@ from studio.state.templates import Templates
 
 STATE_DIR_ENV = "STUDIO_STATE_DIR"
 MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
+MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
+NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
+UPLOAD_PATH = "/api/sources"
 
 
 @dataclass(frozen=True)
@@ -81,10 +92,69 @@ class Bound(_Body):
 router = APIRouter(prefix="/api")
 
 
+class StateGate:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = _state_route_path(scope)
+        if path is None:
+            await self.app(scope, receive, send)
+            return
+        if getattr(scope["app"].state, "services", None) is None:
+            await _answer(scope, receive, send, 503, NOT_CONFIGURED)
+            return
+        if path == UPLOAD_PATH:
+            await self.app(scope, receive, send)
+            return
+        too_large = f"a request body is at most {MAX_JSON_BYTES} bytes"
+        declared = Headers(scope=scope).get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_JSON_BYTES:
+            await _answer(scope, receive, send, 413, too_large)
+            return
+        body, more = bytearray(), True
+        while more:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return  # the client left; there is no one to answer
+            body += message.get("body", b"")
+            more = message.get("more_body", False)
+            if len(body) > MAX_JSON_BYTES:
+                await _answer(scope, receive, send, 413, too_large)
+                return
+        await self.app(scope, _replay(bytes(body), receive), send)
+
+
+def _state_route_path(scope: Scope) -> str | None:
+    if scope["type"] != "http":
+        return None
+    for route in router.routes:
+        if route.matches(scope)[0] is Match.FULL:
+            return route.path
+    return None
+
+
+async def _answer(scope: Scope, receive: Receive, send: Send, status: int, detail: str) -> None:
+    await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
+
+
+def _replay(body: bytes, receive: Receive) -> Receive:
+    replayed = False
+
+    async def replay() -> Message:
+        nonlocal replayed
+        if replayed:
+            return await receive()
+        replayed = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return replay
+
+
 def _services(request: Request) -> Services:
     services = getattr(request.app.state, "services", None)
     if services is None:
-        raise HTTPException(503, "saved state is not configured here; nothing can be saved")
+        raise HTTPException(503, NOT_CONFIGURED)
     return services
 
 
@@ -98,7 +168,8 @@ def _call(action: Callable[..., Any], *args: Any) -> Any:
     except Conflict as error:
         raise HTTPException(409, {"reason": error.reason, "current": error.current}) from None
     except StorageError as error:
-        raise HTTPException(503, f"storage failed, nothing was saved: {error}") from None
+        detail = "storage failed; this request may or may not have been saved, so reload"
+        raise HTTPException(503, f"{detail} before retrying: {error}") from None
 
 
 @router.post("/sources", status_code=201)

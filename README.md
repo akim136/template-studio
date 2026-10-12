@@ -66,20 +66,25 @@ call and made read-only at the end. Stdout gets a summary with counts and spend 
 STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0.0.1 --port 8773
 ```
 
-Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503: a deployment's
-disk is ephemeral, so saving there would be a false Saved. The directory must be outside the
-repository.
+Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503 before any body
+is read: a deployment's disk is ephemeral, so saving there would be a false Saved. The directory
+must be outside the repository, a real directory (not a link), owned by you and owner-only (mode
+700). JSON bodies are at most 1 MiB, checked by declared length and by the bytes that arrive (413).
 
 - `POST /api/sources` seals a PDF (raw body, at most 50 MiB) under its SHA-256, with its page
   inventory. This is the local stand-in for the direct R2 upload.
 - `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
   (`countersigner`, and the `required` field types per signer).
-- `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. A stale base
-  answers 409 with the current template, invalid fields answer 422, and a storage failure answers
-  503: nothing is reported as saved unless it was.
+- `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. Every save makes
+  a new revision, even with identical content, and clears review and approval. A stale base
+  answers 409 with the current template; a retry of a save that already landed (same base, same
+  content) returns that revision instead. Invalid fields answer 422. A storage failure answers 503
+  and says the save may or may not have landed, so reload before retrying.
 - `POST .../review` and `POST .../approval` take the `revision` and `binding` (the hash of the
   source, policy and fields). Any other revision or binding is refused as stale (409). Every new
-  revision starts unreviewed and unapproved.
+  revision starts unreviewed and unapproved. A source whose page inventory is `INCOMPLETE` can be
+  saved against, but review, approval and create stay blocked, and its flags come with the
+  template. A box on a page whose rotation the two PDF readers disagree on is refused.
 - `POST .../operation` creates the template through the simulated adapter, only for the approved
   current revision. An unknown outcome keeps its operation ID and offers only
   `POST .../operation/status-check`; a second create is refused.

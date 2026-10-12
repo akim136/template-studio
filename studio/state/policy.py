@@ -131,6 +131,8 @@ def _field_error(field: object, policy: Policy, pages: dict[tuple[int, int], dic
     page = pages.get((field["document_index"], field["page"]))
     if page is None:
         return "the page is not in the source"
+    if page["rotation"] is None:
+        return "the page's rotation is unknown, so a box on it cannot be placed"
     if page["rotation"]:
         return "the page is rotated; rotated pages need an audited normalizer first"
     if page["width"] is None:

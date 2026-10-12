@@ -7,6 +7,7 @@ from app import app
 from studio.state import api
 from studio.state.store import StorageError
 from tests.state.helpers import POLICY, field, two_page_pdf
+from tests.test_health import STATE_ROUTES
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,7 +92,7 @@ def test_request_bodies_are_strict(client, template, body):
     assert client.put(f"/api/templates/{template['id']}", json=body).status_code == 422
 
 
-def test_a_storage_failure_answers_503_and_nothing_is_saved(
+def test_a_storage_failure_answers_503_and_never_claims_the_outcome(
     client, template, services, monkeypatch
 ):
     def failing(*args):
@@ -100,11 +101,14 @@ def test_a_storage_failure_answers_503_and_nothing_is_saved(
     with monkeypatch.context() as patch:
         patch.setattr(services.store, "replace", failing)
         response = save(client, template["id"], 1, [field()])
-    assert response.status_code == 503 and "nothing was saved" in response.json()["detail"]
+    assert response.status_code == 503
+    assert "may or may not have been saved, so reload before retrying" in response.json()["detail"]
     assert client.get(f"/api/templates/{template['id']}").json()["revision"] == 1
 
 
 def test_uploads_are_bounded_and_must_be_readable(client, monkeypatch):
+    monkeypatch.setattr(api, "MAX_JSON_BYTES", 100)  # an upload has its own, larger bound
+    assert client.post("/api/sources", content=two_page_pdf()).status_code == 201
     monkeypatch.setattr(api, "MAX_SOURCE_BYTES", 100)
     assert client.post("/api/sources", content=b"x" * 101).status_code == 413
     unreadable = client.post("/api/sources", content=b"%PDF-1.7 nope")
@@ -117,16 +121,28 @@ def test_an_unknown_template_answers_404(client):
     assert client.get(f"/api/templates/{'0' * 32}/operation").status_code == 404
 
 
-def test_without_configured_state_every_state_route_answers_503(monkeypatch):
+@pytest.mark.parametrize("method, path", sorted(STATE_ROUTES))
+def test_without_configured_state_every_state_route_answers_503_before_reading_a_body(
+    monkeypatch, method, path
+):
     monkeypatch.setattr(app.state, "services", None)
-    client = TestClient(app)
-    some_id = "0" * 32
-    for method, path in [
-        ("post", "/api/sources"),
-        ("get", f"/api/templates/{some_id}"),
-        ("post", f"/api/templates/{some_id}/operation/status-check"),
-    ]:
-        assert getattr(client, method)(path).status_code == 503, path
+    url = path.replace("{template_id}", "0" * 32)
+    headers = {"content-type": "application/json"}
+    response = TestClient(app).request(method, url, content=b"{not json", headers=headers)
+    assert response.status_code == 503, url
+    assert "not configured" in response.json()["detail"]
+
+
+def test_json_bodies_are_bounded_by_declared_and_by_received_length(client, template, monkeypatch):
+    monkeypatch.setattr(api, "MAX_JSON_BYTES", 200)
+    url = f"/api/templates/{template['id']}"
+    declared = save(client, template["id"], 1, [field()] * 3)
+    assert declared.status_code == 413 and "at most 200 bytes" in declared.json()["detail"]
+    chunks = iter([b'{"base_revision": 1, ', b" " * 300, b"}"])  # sent without a length
+    headers = {"content-type": "application/json"}
+    assert client.put(url, content=chunks, headers=headers).status_code == 413
+    assert client.get(url).json()["revision"] == 1
+    assert save(client, template["id"], 1, []).status_code == 200
 
 
 def test_state_is_configured_only_on_local_disk_outside_the_repository(tmp_path):

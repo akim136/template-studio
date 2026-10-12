@@ -6,16 +6,23 @@ A template's state is a head pointer plus immutable revision objects:
 - `templates/{id}/head.json` names the current revision and its binding, and records the review
   and approval given to it. It changes only by a conditional replace of the version just read.
 
-A save names the revision it started from. If the head has moved, the save is refused with the
-current head (409), so a stale editor never overwrites newer work. A save is acknowledged only
-after the head moved, and a storage failure is reported as not saved. A revision object left by a
-lost race or a failed head write is never referenced.
+A save names the revision it started from. If another save has moved the head, the save is
+refused with the current head (409), so a stale editor never overwrites newer work; a review or
+approval given to the base revision meanwhile does not refuse it, and the save clears them. A save
+is acknowledged only after the head moved, and a storage failure is not reported as saved. A
+revision object left by a lost race or a failed head write is never referenced.
 
 Review and approval record the revision and its binding: the hash of the source, policy and
-fields. Every new revision starts with neither. Any consequential edit therefore clears them,
-including undo, redo and policy changes, which all reach the server as saves. A save that changes
-nothing makes no new revision. A review or approval sent for any revision or binding other than
-the head's is refused as stale.
+fields. Every new revision starts with neither. Every save makes a new revision, even one whose
+content matches the last (Alex, October 12, 2026), so any save after a review or approval clears
+them, including undo, redo and policy changes, which all reach the server as saves. The one
+exception is a retried save that already landed: if the head is one past the base with the same
+binding, that revision is returned and no other is made. A review or approval sent for any
+revision or binding other than the head's is refused as stale.
+
+A source whose page inventory is not COMPLETE can be worked on, but it blocks review, approval
+and create: every snapshot shows the source's inventory and flags, so the user sees what is
+missing (Alex's rule: anything incomplete is flagged to the user).
 """
 
 from __future__ import annotations
@@ -35,6 +42,8 @@ from studio.state.store import ObjectStore, PreconditionFailed, StorageError, ca
 TEMPLATE_ID = re.compile(r"[0-9a-f]{32}")
 ACTOR = "anonymous"  # Vercel admission is not app identity (guide §6)
 MOVED = "the template was saved since this revision; reload it"
+INCOMPLETE = "the source's page inventory is INCOMPLETE; see its flags"
+SAVE_ATTEMPTS = 3  # a head moved only by sign-offs (at most review and approval) is retried
 
 
 def binding(source_sha256: str, policy: dict, fields: list[dict]) -> str:
@@ -67,13 +76,18 @@ class Templates:
         if errors:
             raise Invalid(errors)
         bound = binding(head["source_sha256"], parsed.to_dict(), fields)
-        if head["revision"] != base_revision:
-            if head["revision"] == base_revision + 1 and head["binding"] == bound:
-                return self.snapshot(head), False  # a retry of a save that already landed
-            raise Conflict(MOVED, self.snapshot(head))
-        if head["binding"] == bound:
-            return self.snapshot(head), False  # nothing changed: no new revision
-        return self.snapshot(self._commit(template_id, (head, etag), None, parsed, fields)), True
+        for _ in range(SAVE_ATTEMPTS):
+            if head["revision"] != base_revision:
+                if head["revision"] == base_revision + 1 and head["binding"] == bound:
+                    return self.snapshot(head), False  # a retry of a save that already landed
+                raise Conflict(MOVED, self.snapshot(head))
+            try:
+                committed = self._commit(template_id, (head, etag), None, parsed, fields)
+            except PreconditionFailed:  # the head changed since it was read: read it again
+                head, etag = self.head(template_id)
+                continue
+            return self.snapshot(committed), True
+        raise Conflict(MOVED, self.snapshot(head))
 
     def confirm_review(self, template_id: str, revision: int, bound: str) -> dict:
         return self._sign_off(template_id, revision, bound, "review")
@@ -84,10 +98,10 @@ class Templates:
     def require_approved(self, template_id: str, revision: int, bound: str) -> dict:
         head, _ = self.head(template_id)
         snapshot = self._current(head, revision, bound)
-        if head["approval"] is None:
-            raise Invalid(["this revision is not approved"])
         if snapshot["issues"]:
             raise Invalid(snapshot["issues"])
+        if head["approval"] is None:
+            raise Invalid(["this revision is not approved"])
         return snapshot
 
     def head(self, template_id: str) -> tuple[dict, str]:
@@ -104,14 +118,21 @@ class Templates:
         if stored is None or hashlib.sha256(stored.data).hexdigest() != head["object"]:
             raise StorageError(f"revision {head['revision']} is missing or altered")
         revision = json.loads(stored.data)
+        record = sources.load(self.store, head["source_sha256"])
+        if record is None:
+            raise StorageError(f"the sealed source of revision {head['revision']} is missing")
+        found = issues(revision["fields"], parse_policy(revision["policy"]))
+        if record["inventory"] != "COMPLETE":
+            found.insert(0, INCOMPLETE)
         return {
             "id": head["template_id"],
             "revision": head["revision"],
             "binding": head["binding"],
             "source_sha256": head["source_sha256"],
+            "source": {"inventory": record["inventory"], "flags": record["flags"]},
             "policy": revision["policy"],
             "fields": revision["fields"],
-            "issues": issues(revision["fields"], parse_policy(revision["policy"])),
+            "issues": found,
             "saved_at": revision["saved_at"],
             "review": head["review"],
             "approval": head["approval"],
@@ -187,7 +208,7 @@ class Templates:
         except PreconditionFailed:
             if current is None:
                 raise StorageError("a new template id collided") from None
-            raise Conflict(MOVED, self.snapshot(self.head(template_id)[0])) from None
+            raise  # the caller reads the head again
         return head
 
     def _source(self, sha256: object) -> dict:

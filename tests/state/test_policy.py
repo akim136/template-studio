@@ -53,6 +53,7 @@ MERGE = {"type": "text-merge", "signer": "sender", "name": "email"}
         ({"page": 9}, "not in the source"),
         ({"page": 1.0}, "integers"),
         ({"page": 2}, "rotated"),
+        ({"page": 4}, "rotation is unknown"),
         ({"page": 3}, "could not be measured"),
         ({"x": float("nan")}, "finite"),
         ({"x": "72"}, "finite"),

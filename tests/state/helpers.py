@@ -8,6 +8,7 @@ PAGES = {
     (0, 1): {"width": 612.0, "height": 792.0, "rotation": 0},
     (0, 2): {"width": 612.0, "height": 792.0, "rotation": 90},
     (0, 3): {"width": None, "height": None, "rotation": 0},
+    (0, 4): {"width": 612.0, "height": 792.0, "rotation": None},
 }
 
 
