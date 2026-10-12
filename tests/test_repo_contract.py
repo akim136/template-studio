@@ -1,4 +1,4 @@
-"""The app, phase policy and docs must tell the same P0 story."""
+"""The app, phase policy and docs must tell the same story in every phase."""
 
 import json
 import re
@@ -17,15 +17,22 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def assert_phase_contract(policy: dict, declaration: dict) -> None:
+    assert policy["active_phase"] == declaration["phase"]
+    assert set(declaration["features"]) <= set(policy["features"])
+
+
 def test_policy_declaration_and_app_agree() -> None:
     policy = json.loads(read("docs/phase_scope.json"))
-    declaration = json.loads(read(policy["declaration"]))
-
+    assert_phase_contract(policy, json.loads(read(policy["declaration"])))
     # The phase lives only in the policy, so a scope_update can advance it without app changes.
-    assert policy["active_phase"] == declaration["phase"] == "P0"
     assert not hasattr(app, "PHASE")
     assert app.ANALYSIS_STATUS == "NOT_IMPLEMENTED"
-    assert set(declaration["features"]) <= set(policy["features"])
+
+
+def test_contract_allows_a_scope_update_to_advance_the_phase() -> None:
+    policy = {**json.loads(read("docs/phase_scope.json")), "active_phase": "P1"}
+    assert_phase_contract(policy, {"phase": "P1", "kind": "scope_update", "features": []})
 
 
 def test_docs_state_truthful_status() -> None:
