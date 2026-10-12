@@ -1,7 +1,7 @@
 # Homebase Template Studio: project guide
 
 **Revision 1.0.14-repo.1 · October 11, 2026 · Owner: Alex Kim**
-**Status:** P0 foundation (PR1) is draft PR #1 on the private remote, awaiting Alex's review.
+**Status:** Alex accepted the P0 foundation (PR1) for merge through PR #1 on October 11, 2026, once all checks were green.
 - Analysis is NOT_IMPLEMENTED.
 - Vercel Authentication protects all deployments. Named invitations are NOT_APPLIED.
 - Nothing is merged, there is no inference, and no phase has advanced.
@@ -190,10 +190,10 @@ A `kind: scope_update` change may touch only scope files, the declaration and th
 
 **Merge gate.** Run the checker from the base revision, not from the branch:
 ```sh
-base=$(mktemp) && git show main:scripts/check_repo.py > "$base" \
+base=$(mktemp) && git show main:scripts/check_repo.py > "$base" && test -s "$base" \
   && python3 "$base" phase --base main; echo "exit $?"
 ```
-For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manual review is the gate.
+Merge only on `exit 0`. Any other exit blocks the merge, including a failed `git show` or an empty checker. For PR1, `main` had neither the checker nor a policy, so the snippet stops at `git show` (exit 128). The branch copy reports BOOTSTRAP_REQUIRED, and Alex's manual review was the gate. A test runs this snippet.
 
 **Limits:**
 - CI runs code from the PR, so it is a backstop, not a tamper-proof gate.
@@ -213,14 +213,14 @@ For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manua
 
 | Field | Value |
 |---|---|
-| Phase | P0 (PR1). Local PR-ready diff. Not accepted. |
+| Phase | P0 (PR1). Accepted by Alex for a merge commit into `main` through PR #1 once all checks were green. |
 | Reviews | `/codex-review` round 1: approve, with 3 medium findings. Read-only reviewer subagent: 8 FIX and 4 ESCALATE. In-scope findings were fixed with regression tests, and the escalations are in section 10. Alex is the approver. |
 | Analysis | NOT_IMPLEMENTED |
 | Vercel access | Protection applied to all deployments. Named invitations NOT_APPLIED (section 6). |
 | Hosted CI | Passed on draft PR #1 at `033c371`, generic rules only. |
 | Private inputs | NOT RUN, because they were not supplied. |
 | Inference | None. $0. |
-| Next | Alex reviews PR1, then an Alex-reviewed `scope_update` to P1. |
+| Next | An Alex-reviewed `scope_update` PR to P1, gated by the base checker on `main`. |
 
 ## 10. Open decisions
 

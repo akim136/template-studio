@@ -5,7 +5,10 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import app
+from tests.repo_helpers import SCRIPT, Repo, git_env
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,3 +70,41 @@ def test_ci_is_one_read_only_workflow() -> None:
     assert "--denylist" not in text
     uses = re.findall(r"uses:\s*(\S+)", text)
     assert uses and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", u) for u in uses)
+
+
+def merge_gate_snippet() -> str:
+    guide = read("docs/PROJECT_GUIDE.md")
+    match = re.search(r"\*\*Merge gate\.\*\*.*?```sh\n(.*?)```", guide, re.S)
+    assert match, "the guide must keep a runnable merge-gate snippet"
+    return match.group(1)
+
+
+@pytest.mark.parametrize(
+    ("base_checker", "expected"),
+    [(None, "fails"), ("", "fails"), ("real", "exit 3")],
+)
+def test_merge_gate_snippet_runs_the_base_checker_and_fails_closed(
+    tmp_path: Path, base_checker: str | None, expected: str
+) -> None:
+    repo = Repo(tmp_path / "repo")
+    repo.write("README.md", "# synthetic\n")
+    if base_checker is not None:
+        repo.write("scripts/check_repo.py", SCRIPT.read_text() if base_checker else "")
+    repo.commit("base", "README.md", *(["scripts"] if base_checker is not None else []))
+    repo.git("switch", "-q", "-c", "work")
+
+    result = subprocess.run(
+        ["bash", "-c", merge_gate_snippet()],
+        cwd=repo.root,
+        env=git_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    last = result.stdout.strip().splitlines()[-1]
+
+    if expected == "fails":
+        assert last.startswith("exit ") and last != "exit 0", result.stdout + result.stderr
+    else:
+        assert last == expected, result.stdout + result.stderr
+        assert "BOOTSTRAP_REQUIRED" in result.stdout
