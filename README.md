@@ -94,7 +94,8 @@ names out; it is not a login, and any process on this machine is answered. A fai
 - `POST /api/sources` seals a PDF (raw body, at most 25 MiB) under its SHA-256, with its page
   inventory. This is the local stand-in for the direct R2 upload.
 - `GET /api/sources/{sha256}/pages/{n}.png` returns one page of a sealed source as a PNG for the
-  editor, rendered once from the sealed bytes and kept beside the source.
+  editor, rendered once from the sealed bytes and kept beside the source. It is sent with
+  `no-store`, so the browser does not keep the document's pages.
 - `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
   (`countersigner`, and the `required` field types per signer).
 - `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. Every save makes
