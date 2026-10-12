@@ -41,8 +41,10 @@ BLOCKED_EXTENSIONS = {
     ".key",
     ".p12",
 }
-PRIVATE_DIRS = {"private", "evaluator", "overlays", "_incoming"}
-PRIVATE_NAME = re.compile(r"^(access_roster|template_baseline_|build_fields_)|^\.env($|\.)", re.I)
+PRIVATE_DIRS = {"private", "evaluator", "overlays", "baseline", "_incoming"}
+PRIVATE_NAME = re.compile(
+    r"^(access[_ -]?roster|template[_ -]?baseline[_ -]|build[_ -]?fields[_ -])|^\.env($|\.)", re.I
+)
 POLICY_PATH = "docs/phase_scope.json"
 BOOTSTRAP_REQUIRED = 3
 
@@ -111,9 +113,10 @@ def read_blobs(repo: str, shas: set[str]) -> dict[str, bytes]:
 
 
 def load_denylist(path: str, repo: str) -> list[re.Pattern[bytes]]:
+    if not path:
+        raise CheckError("--denylist needs a file path")
     file = Path(path).resolve()
-    root = Path(git(repo, "rev-parse", "--show-toplevel").decode().strip()).resolve()
-    if file.is_relative_to(root):
+    if file.is_relative_to(Path(repo).resolve()):
         raise CheckError("the denylist must live outside the repository")
     try:
         lines = file.read_text(encoding="utf-8").splitlines()
@@ -129,7 +132,12 @@ def load_denylist(path: str, repo: str) -> list[re.Pattern[bytes]]:
                 f"denylist line {number}: tokens need at least {MIN_TOKEN_LENGTH} characters"
             )
         body = rb"\s+".join(re.escape(part.encode()) for part in token.split())
-        patterns.append(re.compile(rb"(?<!\w)" + body + rb"(?!\w)", re.IGNORECASE))
+        # Letters and digits continue a token; "_", "@", "." and the like end it.
+        left = rb"(?<![A-Za-z0-9])" if token[0].isalnum() else b""
+        right = rb"(?![A-Za-z0-9])" if token[-1].isalnum() else b""
+        patterns.append(re.compile(left + body + right, re.IGNORECASE))
+    if not patterns:
+        raise CheckError("the denylist has no tokens")
     return patterns
 
 
@@ -163,7 +171,7 @@ def content_reasons(data: bytes) -> list[str]:
 
 def run_private(args: argparse.Namespace) -> int:
     repo = args.repo
-    deny = load_denylist(args.denylist, repo) if args.denylist else []
+    deny = load_denylist(args.denylist, repo) if args.denylist is not None else []
     entries = history_entries(repo) if args.all_history else staged_entries(repo)
     sizes = blob_sizes(repo, {sha for _, sha in entries})
     blobs = read_blobs(repo, {sha for sha, size in sizes.items() if size <= MAX_BLOB_BYTES})
@@ -203,11 +211,17 @@ def run_private(args: argparse.Namespace) -> int:
     return 0
 
 
+def exists(repo: str, ref: str, path: str) -> bool:
+    check = subprocess.run(
+        ["git", "-C", repo, "cat-file", "-e", f"{ref}:{path}"], capture_output=True
+    )
+    return check.returncode == 0
+
+
 def read_json(repo: str, ref: str, path: str) -> dict | None:
     """Return the JSON object at ref:path, or None when the file is absent there."""
     spec = f"{ref}:{path}"
-    absent = subprocess.run(["git", "-C", repo, "cat-file", "-e", spec], capture_output=True)
-    if absent.returncode != 0:
+    if not exists(repo, ref, path):
         return None
     try:
         value = json.loads(git(repo, "show", spec))
@@ -262,24 +276,20 @@ def run_phase(args: argparse.Namespace) -> int:
         return BOOTSTRAP_REQUIRED
 
     active, guide, decl_path = policy["active_phase"], policy["guide"], policy["declaration"]
-    changed = [
-        p
-        for p in git(repo, "diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD")
-        .decode()
-        .split("\0")
-        if p
-    ]
+    diff = git(repo, "diff", "--name-only", "--no-relative", "--no-renames", "-z", f"{base}...HEAD")
+    changed = [p for p in diff.decode().split("\0") if p]
     findings = []
-    if guide not in changed:
+    if not exists(repo, "HEAD", guide):
+        findings.append(f"the guide {guide} is missing at HEAD")
+    elif guide not in changed:
         findings.append(f"the guide {guide} was not amended")
-    if decl_path not in changed:
+    declaration = read_json(repo, "HEAD", decl_path)
+    if declaration is None:
+        findings.append(f"the declaration {decl_path} is missing at HEAD")
+        declaration = {}
+    elif decl_path not in changed:
         findings.append(f"the declaration {decl_path} was not refreshed")
-    declaration = read_json(repo, "HEAD", decl_path) or {}
     kind, features = declaration.get("kind"), declaration.get("features", [])
-    if declaration.get("phase") != active:
-        findings.append(
-            f"declared phase {declaration.get('phase')!r} does not match active phase {active!r}"
-        )
     if not is_str_list(features):
         findings.append("features must be a list of feature IDs")
         features = []
@@ -306,8 +316,22 @@ def run_phase(args: argparse.Namespace) -> int:
         for path in operational:
             if not covered(path, scope):
                 findings.append(f"scope_update cannot bundle operational change {path}")
+        # The proposed policy governs the next change, so it must load; it may advance the phase.
+        try:
+            proposed = load_policy(repo, "HEAD")
+        except CheckError as error:
+            findings.append(str(error))
+        else:
+            if proposed is None:
+                findings.append(f"a scope_update cannot delete {POLICY_PATH}")
+            else:
+                active = proposed["active_phase"]
     else:
         findings.append(f"kind must be 'feature' or 'scope_update', not {kind!r}")
+    if declaration.get("phase") != active:
+        findings.append(
+            f"declared phase {declaration.get('phase')!r} does not match active phase {active!r}"
+        )
 
     where = f"base {base} {base_sha[:12]}"
     if findings:
@@ -315,7 +339,8 @@ def run_phase(args: argparse.Namespace) -> int:
         for finding in findings:
             print(f"  {finding}")
         return 1
-    print(f"phase check passed: {kind} in {active} ({where}, {len(changed)} changed path(s))")
+    verb = "to" if kind == "scope_update" else "in"
+    print(f"phase check passed: {kind} {verb} {active} ({where}, {len(changed)} changed path(s))")
     return 0
 
 
@@ -341,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        # Subdirectory paths would narrow ls-files, ls-tree and diff to that subtree.
+        args.repo = git(args.repo, "rev-parse", "--show-toplevel").decode().strip()
         return run_private(args) if args.command == "private" else run_phase(args)
     except CheckError as error:
         print(f"check_repo: {error}", file=sys.stderr)

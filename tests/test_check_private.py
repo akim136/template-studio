@@ -45,9 +45,12 @@ def test_without_a_denylist_only_generic_rules_run(repo: Repo) -> None:
         ("notes/bundle.bin", b"PK\x03\x04rest", "ZIP content"),
         ("private/list.csv", b"a,b\n", "private or answer-bearing directory"),
         ("evaluator/answers.json", b"{}", "private or answer-bearing directory"),
+        ("baseline/dev-a/fields.json", b"{}", "private or answer-bearing directory"),
         ("cases/a/overlays/page_01.png", b"img", "private or answer-bearing directory"),
         ("cases/a/scripts/build_fields_A.py", b"pass\n", "private or answer-bearing file name"),
         ("ACCESS_ROSTER.csv", b"name\n", "private or answer-bearing file name"),
+        ("access-roster.csv", b"name\n", "private or answer-bearing file name"),
+        ("cases/build-fields-B.py", b"pass\n", "private or answer-bearing file name"),
         ("Template_Baseline_20260101.txt", b"x\n", "private or answer-bearing file name"),
         (".env", b"KEY=value\n", "private or answer-bearing file name"),
         ("config/.env.local", b"KEY=value\n", "private or answer-bearing file name"),
@@ -62,12 +65,27 @@ def test_generic_rules_block_staged_files(repo: Repo, path: str, data: bytes, re
 
 
 def test_similar_ordinary_names_pass(repo: Repo) -> None:
-    paths = ["docs/privacy.md", "studio/overlay_geometry.py", "docs/environment.md"]
+    paths = [
+        "docs/privacy.md",
+        "studio/overlay_geometry.py",
+        "docs/environment.md",
+        "docs/baseline_notes.md",
+    ]
     for path in paths:
         repo.write(path, "Mentions %PDF- and PK markers mid-file only.\n")
     repo.git("add", "--", *paths)
     result = repo.check("private", "--staged")
     assert result.returncode == 0, result.stdout
+
+
+def test_scan_from_a_subdirectory_covers_the_whole_repository(repo: Repo) -> None:
+    repo.write("private/list.csv", "a,b\n")
+    repo.write("docs/readme.md", "ordinary\n")
+    repo.commit("add", "private/list.csv", "docs/readme.md")
+    for mode in ("--staged", "--all-history"):
+        result = repo.check("--repo", str(repo.root / "docs"), "private", mode)
+        assert result.returncode == 1, mode
+        assert "private/list.csv" in result.stdout
 
 
 def test_oversized_blob_is_blocked(repo: Repo) -> None:
@@ -97,6 +115,18 @@ def test_denylist_matches_whole_tokens_only(repo: Repo, denylist: str) -> None:
     repo.write("docs/birds.md", "A KESTREL appears.\n")
     repo.git("add", "--", "docs/birds.md")
     assert repo.check("private", "--staged", "--denylist", denylist).returncode == 1
+
+
+def test_denylist_treats_underscores_and_punctuation_as_boundaries(
+    repo: Repo, tmp_path: Path
+) -> None:
+    tokens = tmp_path / "tokens.txt"
+    tokens.write_text("Kestrel\n@corp.example\n", encoding="utf-8")
+    for text in ("KESTREL_FUND = 1\n", "build_fields_kestrel\n", "mail jo@corp.example\n"):
+        repo.write("docs/notes.md", text)
+        repo.git("add", "--", "docs/notes.md")
+        result = repo.check("private", "--staged", "--denylist", str(tokens))
+        assert result.returncode == 1, text
 
 
 def test_denylisted_path_is_redacted(repo: Repo, denylist: str) -> None:
@@ -140,3 +170,12 @@ def test_bad_denylists_are_usage_errors(repo: Repo, tmp_path: Path) -> None:
     result = repo.check("private", "--staged", "--denylist", str(inside))
     assert result.returncode == 2
     assert "outside the repository" in result.stderr
+
+    comments = tmp_path / "comments.txt"
+    comments.write_text("# no tokens yet\n\n", encoding="utf-8")
+    result = repo.check("private", "--staged", "--denylist", str(comments))
+    assert result.returncode == 2
+    assert "no tokens" in result.stderr
+
+    result = repo.check("private", "--staged", "--denylist", "")
+    assert result.returncode == 2

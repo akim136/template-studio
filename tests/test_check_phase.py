@@ -24,11 +24,11 @@ def declare(
     repo.write("docs/phase_change.json", json.dumps(declaration))
 
 
-PREPARED = {"docs/GUIDE.md", "docs/phase_change.json"}
+PREPARED = {"docs/GUIDE.md", "docs/phase_change.json", "docs/phase_scope.json"}
 
 
 def change(repo: Repo, *paths: str) -> None:
-    """Commit paths; the guide and declaration keep what amend_guide_and_declare wrote."""
+    """Commit paths; the guide, declaration and policy keep what the test wrote for them."""
     for path in paths:
         if path not in PREPARED:
             repo.write(path, f"changed {path}\n")
@@ -46,6 +46,10 @@ def repo(tmp_path: Path) -> Repo:
     repo.commit("base", "docs", "src", "scripts")
     repo.git("switch", "-q", "-c", "work")
     return repo
+
+
+def edit_policy(repo: Repo, **changes: object) -> None:
+    repo.write("docs/phase_scope.json", json.dumps({**POLICY, **changes}))
 
 
 def amend_guide_and_declare(repo: Repo, kind: str, features: list[str], **kw: str) -> None:
@@ -111,8 +115,7 @@ def test_feature_change_cannot_touch_scope_files(repo: Repo) -> None:
 
 
 def test_feature_branch_cannot_widen_its_own_policy(repo: Repo) -> None:
-    widened = {**POLICY, "features": {"F-alpha": {"paths": ["src/"]}}}
-    repo.write("docs/phase_scope.json", json.dumps(widened))
+    edit_policy(repo, features={"F-alpha": {"paths": ["src/"]}})
     amend_guide_and_declare(repo, "feature", ["F-alpha"])
     change(repo, "src/other.py", "docs/GUIDE.md", "docs/phase_change.json")
     repo.commit("widen", "docs/phase_scope.json")
@@ -125,16 +128,18 @@ def test_feature_branch_cannot_widen_its_own_policy(repo: Repo) -> None:
 
 
 def test_scope_update_touching_only_scope_files_and_guide_passes(repo: Repo) -> None:
+    edit_policy(repo, scope_files=[*POLICY["scope_files"], "AGENTS.md"])
     amend_guide_and_declare(repo, "scope_update", [])
     change(repo, "docs/phase_scope.json", "docs/GUIDE.md", "docs/phase_change.json")
 
     result = repo.check("phase", "--base", "main")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "phase check passed: scope_update in P1" in result.stdout
+    assert "phase check passed: scope_update to P1" in result.stdout
 
 
 def test_scope_update_cannot_bundle_operational_feature_changes(repo: Repo) -> None:
+    edit_policy(repo, scope_files=[*POLICY["scope_files"], "AGENTS.md"])
     amend_guide_and_declare(repo, "scope_update", [])
     change(
         repo,
@@ -190,3 +195,99 @@ def test_unknown_base_or_malformed_policy_is_a_usage_error(
 
     assert result.returncode == 2
     assert result.stderr.startswith("check_repo: ")
+
+
+def test_deleting_the_guide_fails(repo: Repo) -> None:
+    declare(repo, "feature", ["F-alpha"], summary="this change")
+    repo.git("rm", "-q", "docs/GUIDE.md")
+    change(repo, "src/alpha/a.py", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1
+    assert "the guide docs/GUIDE.md is missing at HEAD" in result.stdout
+
+
+def test_missing_declaration_fails(repo: Repo) -> None:
+    repo.git("rm", "-q", "docs/phase_change.json")
+    repo.write("docs/GUIDE.md", "# guide\n\nAmended.\n")
+    change(repo, "src/alpha/a.py", "docs/GUIDE.md")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1
+    assert "the declaration docs/phase_change.json is missing at HEAD" in result.stdout
+
+
+def test_feature_change_cannot_delete_or_rename_scope_files(repo: Repo) -> None:
+    amend_guide_and_declare(repo, "feature", ["F-alpha"])
+    repo.git("mv", "scripts/check.py", "src/alpha/check.py")
+    change(repo, "docs/GUIDE.md", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1
+    assert "scope file scripts/check.py changes only with kind: scope_update" in result.stdout
+
+
+def test_kind_must_be_feature_or_scope_update(repo: Repo) -> None:
+    amend_guide_and_declare(repo, "bootstrap", ["F-alpha"])
+    change(repo, "src/alpha/a.py", "docs/GUIDE.md", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1
+    assert "kind must be 'feature' or 'scope_update', not 'bootstrap'" in result.stdout
+
+
+def test_scope_update_declares_no_features(repo: Repo) -> None:
+    edit_policy(repo, scope_files=[*POLICY["scope_files"], "AGENTS.md"])
+    amend_guide_and_declare(repo, "scope_update", ["F-alpha"])
+    change(repo, "docs/phase_scope.json", "docs/GUIDE.md", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1
+    assert "a scope_update declares no features" in result.stdout
+
+
+def test_scope_update_advances_the_phase(repo: Repo) -> None:
+    edit_policy(repo, active_phase="P2")
+    amend_guide_and_declare(repo, "scope_update", [], phase="P2")
+    change(repo, "docs/phase_scope.json", "docs/GUIDE.md", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "phase check passed: scope_update to P2" in result.stdout
+
+    declare(repo, "scope_update", [], phase="P1", summary="stale phase")
+    repo.commit("stale", "docs/phase_change.json")
+    result = repo.check("phase", "--base", "main")
+    assert result.returncode == 1
+    assert "declared phase 'P1' does not match active phase 'P2'" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("policy", "reason"),
+    [
+        (None, "a scope_update cannot delete docs/phase_scope.json"),
+        ("{not json", "HEAD:docs/phase_scope.json is not valid JSON"),
+        ('{"active_phase": "P2"}', "HEAD:docs/phase_scope.json is malformed"),
+    ],
+)
+def test_scope_update_must_leave_a_valid_policy(
+    repo: Repo, policy: str | None, reason: str
+) -> None:
+    amend_guide_and_declare(repo, "scope_update", [])
+    if policy is None:
+        repo.git("rm", "-q", "docs/phase_scope.json")
+        repo.commit("change", "docs/GUIDE.md", "docs/phase_change.json")
+    else:
+        repo.write("docs/phase_scope.json", policy)
+        repo.commit("change", "docs/phase_scope.json", "docs/GUIDE.md", "docs/phase_change.json")
+
+    result = repo.check("phase", "--base", "main")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert reason in result.stdout

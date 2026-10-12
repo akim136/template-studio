@@ -17,6 +17,7 @@
 *.p12
 /private/
 /evaluator/
+/baseline/
 /_incoming/
 Template_Baseline_*
 ACCESS_ROSTER*
