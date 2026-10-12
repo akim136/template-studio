@@ -359,7 +359,12 @@ class Operations:
                 stored = self.store.get(key)
                 current, etag = json.loads(stored.data), stored.etag
                 continue
-            return reopened  # no orphan record to mark: only this call could have written one
+            if replaced:  # a status check may have kept it as an orphan meanwhile
+                try:
+                    self._reclaimed(operation)
+                except StorageError:
+                    pass  # best effort: an orphan whose operation holds the slot is not counted
+            return reopened
         raise StorageError("the operation kept changing while its outcome was recorded")
 
     def _orphan(self, operation: dict, external_id: str | None, note: str = REPLACED) -> dict:
