@@ -54,8 +54,8 @@ After every call, a model, provider or credential other than the one requested s
 (`ROUTE_VIOLATION`). The gateway can still fall back from your key to Vercel's credentials mid-run,
 and that shows only after the call, so up to `--workers` pages (at most 4) may already be in flight.
 A call whose worst case could cross the run cap or the $10 total is never sent, and a call that
-costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx)
-is recorded at $0. The record (source text and model
+costs more than it reserved stops the run (`BUDGET_STOPPED`). A call the gateway refuses (HTTP 4xx,
+not a timeout) is recorded at $0 and stops the run. The record (source text and model
 answers) goes to `--out`, which must be outside the repository: it is created owner-only before any
 call and made read-only at the end. Stdout gets a summary with counts and spend only.
 

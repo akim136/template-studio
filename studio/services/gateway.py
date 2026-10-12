@@ -36,13 +36,14 @@ CHAT_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 GENERATION_URL = "https://ai-gateway.vercel.sh/v1/generation?id="
 PROVIDER = "openai"
 TIMEOUT_S = 180
-# These statuses would come back for every later call too (rejected token, no credit, unknown
-# model), so they stop the run instead of failing it page by page.
-FATAL_STATUSES = frozenset({401, 402, 403, 404})
+# A 4xx means the gateway refused the request: nothing was generated, and the same request would
+# be refused again on every later page, so it settles at $0 and stops the run. A timeout (408, or
+# a proxy's 499) is not a refusal: the provider may still have run and billed the call.
+TIMEOUT_STATUSES = frozenset({408, 499})
 ERROR_CODE = re.compile(r"[a-z0-9_.-]{1,64}")
 
 # The models offered, in USD per token (input, output), from the gateway's model list on
-# October 12, 2026. gpt-6-astra is not offered (Alex, October 12, 2026).
+# October 12, 2026. gpt-6-astra and gpt-5.5 are not offered (Alex, October 12, 2026).
 PRICES = {
     model: (Decimal(price_in) / 1_000_000, Decimal(price_out) / 1_000_000)
     for model, (price_in, price_out) in {  # USD per million tokens
@@ -54,7 +55,6 @@ PRICES = {
         "openai/gpt-5.4": ("2.5", "15"),
         "openai/gpt-5.4-mini": ("0.75", "4.5"),
         "openai/gpt-5.4-nano": ("0.2", "1.25"),
-        "openai/gpt-5.5": ("5", "30"),
         "openai/gpt-5.6-sol": ("4", "20"),
         "openai/gpt-5.6-terra": ("2", "12"),
         "openai/gpt-5.6-luna": ("0.2", "1.2"),
@@ -85,12 +85,14 @@ class GatewayError(Exception):
 
     def __init__(self, message: str, fatal: bool = False, status: int | None = None):
         super().__init__(message)
-        self.fatal, self.status = fatal, status
+        self.status = status
+        self.fatal = fatal or self.refused
 
     @property
     def refused(self) -> bool:
-        """The gateway answered HTTP 4xx: it refused the request, so nothing was generated."""
-        return self.status is not None and 400 <= self.status < 500
+        """The gateway answered HTTP 4xx other than a timeout: nothing was generated."""
+        status = self.status
+        return status is not None and 400 <= status < 500 and status not in TIMEOUT_STATUSES
 
 
 @dataclass(frozen=True)
@@ -141,9 +143,7 @@ def urllib_transport(url: str, body: bytes | None, headers: dict[str, str]) -> b
         code = _error_code(error)
         detail = f" ({code})" if code else ""
         raise GatewayError(
-            f"HTTP {error.code} from the gateway{detail}",
-            fatal=error.code in FATAL_STATUSES,
-            status=error.code,
+            f"HTTP {error.code} from the gateway{detail}", status=error.code
         ) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
         raise GatewayError(f"no response from the gateway ({type(error).__name__})") from None

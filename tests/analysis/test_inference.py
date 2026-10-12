@@ -397,3 +397,15 @@ def test_the_cli_refuses_a_page_range_beyond_any_document_before_expanding_it():
     with pytest.raises(ValueError, match="page range"):
         eval.infer._pages(f"1-{eval.infer.PAGE_LIMIT + 1}")
     assert eval.infer._pages("2-3,1") == [1, 2, 3]
+
+
+def test_a_refused_page_call_stops_the_run_instead_of_repeating_on_every_page(tmp_path):
+    def bad_request(body):
+        if page_of(body) is not None:
+            return gateway.GatewayError("HTTP 400 from the gateway", status=400)
+        return None
+
+    fake = FakeGateway(fail=bad_request)
+    record = run(tmp_path, fake, config=SERIAL)
+    assert page_calls(fake) == [1] and record["status"] == "PARTIAL"
+    assert record["stop_reason"].startswith("gateway: HTTP 400")

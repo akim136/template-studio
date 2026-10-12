@@ -81,14 +81,16 @@ def test_any_other_model_or_provider_is_a_route_violation(tmp_path, kwargs, prob
         call(ledger(tmp_path), FakeGateway(**kwargs))
 
 
-def test_a_failed_call_keeps_its_worst_case_reserved(tmp_path):
-    def broken(url, body, headers):
-        raise gateway.GatewayError("HTTP 502 from the gateway: synthetic")
+@pytest.mark.parametrize("status", [None, 408, 499, 500, 502, 503])
+def test_a_failed_call_that_was_not_refused_keeps_its_worst_case(tmp_path, status):
+    def broken(url, body, headers):  # a timeout or a 5xx may still have been billed
+        raise gateway.GatewayError(f"HTTP {status} from the gateway: synthetic", status=status)
 
     book = ledger(tmp_path)
-    with pytest.raises(gateway.GatewayError):
+    with pytest.raises(gateway.GatewayError) as error:
         call(book, broken, worst=0.07)
     assert book.totals() == (0.07, 0.07)
+    assert not error.value.refused and not error.value.fatal
 
 
 def test_a_call_that_could_cross_the_run_cap_is_never_sent(tmp_path):
@@ -260,17 +262,22 @@ def test_a_call_the_gateway_refused_settles_at_zero(tmp_path, status):
         raise gateway.GatewayError(f"HTTP {status} from the gateway", status=status)
 
     book = ledger(tmp_path)
-    with pytest.raises(gateway.GatewayError):
+    with pytest.raises(gateway.GatewayError) as error:
         call(book, refused, worst=0.07)
     assert book.totals() == (0.0, 0.0)
-    settle = [row for row in rows(book) if row["kind"] == "settle"][0]
+    (settle,) = [row for row in rows(book) if row["kind"] == "settle"]  # settled exactly once
     assert settle["usd"] == "0" and settle["refused"] == f"HTTP {status} from the gateway"
+    assert error.value.fatal  # a refusal would repeat on every page, so it stops the run
 
 
-def test_astra_is_not_offered_and_the_gpt5_models_are_reasoning_models():
+@pytest.mark.parametrize("model", ["openai/gpt-6-astra", "openai/gpt-5.5"])
+def test_the_models_alex_excluded_are_not_offered(model):
     with pytest.raises(ValueError, match="no price"):
-        gateway.Route("openai/gpt-6-astra", "system")
-    for model in ("openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5.5"):
+        gateway.Route(model, "system")
+
+
+def test_the_gpt5_models_are_reasoning_models():
+    for model in ("openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5.6-sol"):
         body = gateway.request_body(gateway.Route(model, "byok"), MESSAGES, SCHEMA, 9)
         assert body["reasoning"]["effort"] == "medium" and "temperature" not in body
 
