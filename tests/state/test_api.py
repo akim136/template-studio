@@ -200,17 +200,18 @@ def test_json_bodies_are_bounded_by_declared_and_by_received_length(client, temp
     assert save(client, template["id"], 1, []).status_code == 200
 
 
-def test_state_is_configured_only_on_local_disk_outside_the_repository(tmp_path):
-    assert api.services_from_environment({}, ROOT) is None
+def test_local_state_is_configured_only_off_vercel_and_outside_the_repository(tmp_path):
+    assert api.configure({}, ROOT) == api.Configuration(None, "not_configured")
     local = {api.STATE_DIR_ENV: str(tmp_path / "state")}
-    assert api.services_from_environment(local, ROOT) is not None
-    assert api.services_from_environment({**local, "VERCEL": "1"}, ROOT) is None
+    assert api.configure(local, ROOT).state == "local"
+    on_vercel = api.configure({**local, "VERCEL": "1"}, ROOT)  # local disk is never used there
+    assert on_vercel.services is None and on_vercel.state == "not_configured"
     with pytest.raises(RuntimeError, match="outside the repository"):
-        api.services_from_environment({api.STATE_DIR_ENV: str(ROOT / "state")}, ROOT)
+        api.configure({api.STATE_DIR_ENV: str(ROOT / "state")}, ROOT)
     (tmp_path / "real").mkdir(mode=0o700)
     (tmp_path / "link").symlink_to(tmp_path / "real")
     with pytest.raises(StorageError, match="not a link"):
-        api.services_from_environment({api.STATE_DIR_ENV: str(tmp_path / "link")}, ROOT)
+        api.configure({api.STATE_DIR_ENV: str(tmp_path / "link")}, ROOT)
 
 
 def gate(services, method, path, receive, host="127.0.0.1", peer="127.0.0.1"):

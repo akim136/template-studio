@@ -44,7 +44,7 @@ from studio.state.store import ObjectStore, PreconditionFailed, StorageError, ca
 
 TEMPLATE_ID = re.compile(r"[0-9a-f]{32}")
 SAVE_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
-ACTOR = "anonymous"  # Vercel admission is not app identity (guide §6)
+ACTOR = "anonymous"  # no app identity: local loopback use (guide §6)
 MOVED = "the template was saved since this revision; reload it"
 INCOMPLETE = "the source's page inventory is INCOMPLETE; see its flags"
 SAVE_ATTEMPTS = 3  # a head moved only by sign-offs (at most review and approval) is retried
@@ -102,11 +102,11 @@ class Templates:
             return self.snapshot(committed), True
         raise Conflict(MOVED, self.snapshot(head))
 
-    def confirm_review(self, template_id: str, revision: int, bound: str) -> dict:
-        return self._sign_off(template_id, revision, bound, "review")
+    def confirm_review(self, template_id: str, revision: int, bound: str, by: str = ACTOR) -> dict:
+        return self._sign_off(template_id, revision, bound, "review", by)
 
-    def approve(self, template_id: str, revision: int, bound: str) -> dict:
-        return self._sign_off(template_id, revision, bound, "approval")
+    def approve(self, template_id: str, revision: int, bound: str, by: str = ACTOR) -> dict:
+        return self._sign_off(template_id, revision, bound, "approval", by)
 
     def require_approved(self, template_id: str, revision: int, bound: str) -> dict:
         head, _ = self.head(template_id)
@@ -151,7 +151,7 @@ class Templates:
             "approval": head["approval"],
         }
 
-    def _sign_off(self, template_id: str, revision: int, bound: str, kind: str) -> dict:
+    def _sign_off(self, template_id: str, revision: int, bound: str, kind: str, by: str) -> dict:
         head, etag = self.head(template_id)
         snapshot = self._current(head, revision, bound)
         if snapshot["issues"]:
@@ -160,7 +160,7 @@ class Templates:
             raise Invalid(["the review of this revision is not confirmed"])
         if head[kind] is not None:
             return snapshot  # already given to this revision
-        given = {"revision": revision, "binding": bound, "at": self._now(), "by": ACTOR}
+        given = {"revision": revision, "binding": bound, "at": self._now(), "by": by}
         updated = {**head, kind: given}
         try:
             self.store.replace(f"templates/{template_id}/head.json", canonical(updated), etag)

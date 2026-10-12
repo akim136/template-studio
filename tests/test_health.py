@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app import app
+from studio.state.api import auth_router
 from studio.state.api import router as state_router
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +16,9 @@ def test_healthz_reports_truthful_status() -> None:
     with TestClient(app) as client:  # runs startup and shutdown
         response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "analysis": "NOT_IMPLEMENTED"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["analysis"] == "NOT_IMPLEMENTED"
+    assert response.json()["state"] in ("local", "r2", "not_configured")
 
 
 STATE_ROUTES = {
@@ -28,6 +31,14 @@ STATE_ROUTES = {
     ("POST", "/api/templates/{template_id}/operation"),
     ("GET", "/api/templates/{template_id}/operation"),
     ("POST", "/api/templates/{template_id}/operation/status-check"),
+    ("POST", "/api/uploads"),
+    ("POST", "/api/uploads/{sha256}/seal"),
+}
+AUTH_ROUTES = {
+    ("GET", "/auth/login"),
+    ("GET", "/auth/callback"),
+    ("GET", "/auth/me"),
+    ("POST", "/auth/logout"),
 }
 
 
@@ -37,13 +48,14 @@ def exposed_routes() -> set[tuple[str, str]]:
         if hasattr(route, "path"):
             exposed |= {(method, route.path) for method in route.methods}
         else:  # FastAPI 0.143 includes a router lazily, as one route with no path of its own
-            assert route.original_router is state_router
-            exposed |= {(m, r.path) for r in state_router.routes for m in r.methods}
+            assert route.original_router in (state_router, auth_router)
+            routes = route.original_router.routes
+            exposed |= {(m, r.path) for r in routes for m in r.methods}
     return exposed
 
 
 def test_no_other_routes_are_exposed() -> None:
-    assert exposed_routes() == STATE_ROUTES | {("GET", "/healthz")}
+    assert exposed_routes() == STATE_ROUTES | AUTH_ROUTES | {("GET", "/healthz")}
     client = TestClient(app)
     for path in ("/", "/docs", "/redoc", "/openapi.json", "/api/analyze"):
         assert client.get(path).status_code == 404, path

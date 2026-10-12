@@ -40,6 +40,13 @@ def _keys(sha256: str) -> tuple[str, str]:
     return f"sources/{sha256}.pdf", f"sources/{sha256}.json"
 
 
+def upload_key(sha256: str) -> str:
+    """Where a browser puts a PDF before it is sealed. The bytes there are untrusted until seal
+    re-hashes them; a lifecycle rule on the bucket removes them."""
+    _keys(sha256)
+    return f"uploads/{sha256}.pdf"
+
+
 def seal(store: ObjectStore, data: bytes) -> dict:
     if len(data) > MAX_SOURCE_BYTES:
         raise SourceError(oversize_message(len(data)))
