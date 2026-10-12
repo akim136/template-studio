@@ -9,8 +9,9 @@ An operation is recorded before the adapter is called, and moves through these s
 - CREATING: the create call is being made.
 - VERIFYING: the adapter reported a create; it is being read back.
 - CREATED: read back, with the payload that was sent.
-- FAILED: the adapter refused, or a status check found nothing after the grace period. Nothing
-  exists, so a new create is allowed.
+- FAILED: the adapter refused, or a status check found nothing after the grace period (from the
+  call's start or, for an unknown outcome, from when it returned). Nothing exists, so a new create
+  is allowed.
 - NEEDS_STATUS_CHECK: the outcome is unknown (an error, a timeout, a crash mid-call, a create that
   cannot be read back). The operation keeps its ID, and only a status check is offered.
 
@@ -22,23 +23,23 @@ for the same revision.
 
 A create the adapter reports, or a status check finds at the provider, is written onto the stored
 operation even if a concurrent status check moved it meanwhile (to FAILED, say), so it is never
-lost or left FAILED. So is an unknown outcome: a check that declared the operation FAILED looked
-before the create may have landed, so the operation is reopened for a status check. If the
-operation was replaced by another meanwhile, it takes the slot back when the replacement is FAILED
-and nothing was created since it was replaced (the replacement lists the same `replaced`); an
-orphan record an earlier report left for it then says so and no longer counts. Otherwise the
-provider may hold both, and the late create is kept in the orphan list
-(templates/{id}/orphans/index.json) with a note to resolve it by hand; a replacement declared
-FAILED whose create lands later finds the slot taken and is kept the same way, as is an unknown
-outcome after the operation was replaced. An unresolved orphan is shown with the operation and
-refuses every create until someone checks the provider and resolves it with a note (Alex, October
-12, 2026); a create checks again after it is recorded, and is not attempted if an orphan was kept
-meanwhile (one kept after that check, while the call is made, cannot stop it: no stored check is
-atomic with an external call). A status check that would change nothing writes nothing, so repeated
-checks cannot crowd out a create being recorded. If recording the operation fails before the
-adapter is called, the operation is marked FAILED (not attempted) where it landed; if recording the
-outcome fails after the call, the error says to check its status, unless an orphan could not be
-kept, which a status check cannot find: that error names the operation instead.
+lost or left FAILED. An unknown outcome is written the same way: a check that declared the
+operation FAILED looked before the create may have landed, so the operation is reopened for a
+status check. If the operation was replaced by another meanwhile, a create reported, found or left
+unknown takes the slot back when the replacement is FAILED and nothing was created since it was
+replaced (the replacement lists the same `replaced`); an orphan record an earlier report left for
+it then says so and no longer counts. Otherwise the provider may hold both, and it is kept in the
+orphan list (templates/{id}/orphans/index.json) with a note to resolve it by hand; a replacement
+declared FAILED whose create lands later finds the slot taken and is kept the same way. An
+unresolved orphan is shown with the operation and refuses every create until someone checks the
+provider and resolves it with a note (Alex, October 12, 2026); a create checks again after it is
+recorded, and is not attempted if an orphan was kept meanwhile (one kept after that check, while
+the call is made, cannot stop it: no stored check is atomic with an external call). A status check
+that would change nothing writes nothing, so repeated checks cannot crowd out a create being
+recorded. If recording the operation fails before the adapter is called, the operation is marked
+FAILED (not attempted) where it landed; if recording the outcome fails after the call, the error
+says to check its status, unless an orphan could not be kept, which a status check cannot find:
+that error names the operation instead.
 
 Retries belong to the store: the R2 store (on `feat/hosted-login`) retries a request without a
 clear answer, and the local store does not retry. A write that still fails leaves the operation as
@@ -66,8 +67,9 @@ from studio.state.templates import ACTOR, Templates
 
 CREATING, VERIFYING, CREATED = "CREATING", "VERIFYING", "CREATED"
 FAILED, NEEDS_STATUS_CHECK = "FAILED", "NEEDS_STATUS_CHECK"
-# Not finding a create counts as "nothing was created" only after this long. It must exceed any
-# real adapter's create timeout, or a slow create could land after it was declared failed.
+# Not finding a create counts as "nothing was created" only this long after the call started, or
+# returned with an unknown outcome. It must exceed any real adapter's create timeout, or a slow
+# create could land after it was declared failed.
 GRACE = timedelta(minutes=2)
 RECORD_ATTEMPTS = 10  # concurrent writes a create being recorded can lose to before it gives up
 REPLACED = (
@@ -248,12 +250,13 @@ class Operations:
         except Refused as error:
             return self._after_call(key, operation, etag, FAILED, note=f"refused: {error}")
         except Exception as error:  # a timeout or any error: the create may have happened
+            outcome = type(error).__name__
             try:
-                return self._unknown(key, operation, etag, type(error).__name__)
+                return self._unknown(key, operation, etag, outcome)
             except Unkept:
                 raise
-            except StorageError as error:
-                raise _unrecorded(error) from None
+            except StorageError as failure:
+                raise _unrecorded(failure) from None
         try:
             operation, etag = self._record(key, operation, etag, external_id, VERIFYING)
             if etag is None:
@@ -289,7 +292,8 @@ class Operations:
         if operation["reported_created"]:
             note = "the adapter reported a create that cannot be found yet; check again"
             return self._move(key, operation, etag, NEEDS_STATUS_CHECK, note=note)[0]
-        if self.clock() - datetime.fromisoformat(operation["started_at"]) < GRACE:
+        since = operation.get("returned_at") or operation["started_at"]
+        if self.clock() - datetime.fromisoformat(since) < GRACE:
             # Too early to conclude, and writing now could clobber a create still in flight.
             return {**operation, "note": "not found yet; the create may still be running"}
         note = "nothing was created; a new create is allowed"
@@ -332,27 +336,30 @@ class Operations:
         raise StorageError("the operation kept changing while its create was recorded")
 
     def _unknown(self, key: str, operation: dict, etag: str, error: str) -> dict:
-        """Records that the create's outcome is unknown, whatever a concurrent status check did
-        meanwhile. One that declared it FAILED (the call outlasted the grace period) looked
-        before the create may have landed, so the operation is reopened; if another create
-        replaced it since, the provider may hold both, so it is kept as an orphan."""
-        note = f"create outcome unknown ({error})"
+        """Records that the create's outcome is unknown, like `_record` records a create,
+        whatever a concurrent status check did meanwhile. One that declared it FAILED (the call
+        outlasted the grace period) looked before the create may have landed, so the operation
+        is reopened, and the grace period runs again from now (`returned_at`)."""
+        now = self._now()
+        changes = {"note": f"create outcome unknown ({error})", "returned_at": now}
         current = operation
         for _ in range(RECORD_ATTEMPTS):
-            if current["id"] != operation["id"]:
-                if operation["id"] in _ids(current):
-                    return current  # found, created, then replaced by a later revision's create
-                return self._orphan(operation, None, note=f"{note}; {REPLACED}")
-            if current["state"] not in (CREATING, FAILED):
+            replaced = current["id"] != operation["id"]
+            if replaced and operation["id"] in _ids(current):
+                return current  # found, created, then replaced by a later revision's create
+            if replaced and (current["state"] != FAILED or _ids(current) != _ids(operation)):
+                return self._orphan(operation, None, note=f"{changes['note']}; {REPLACED}")
+            if not replaced and current["state"] not in (CREATING, FAILED):
                 return current  # found, or already waiting on a status check: its state stands
-            reopened = {**current, "note": note, "state": NEEDS_STATUS_CHECK}
-            reopened["updated_at"] = self._now()
+            mine = operation if replaced else current
+            reopened = {**mine, **changes, "state": NEEDS_STATUS_CHECK, "updated_at": now}
             try:
                 self.store.replace(key, canonical(reopened), etag)
-                return reopened
             except PreconditionFailed:
                 stored = self.store.get(key)
                 current, etag = json.loads(stored.data), stored.etag
+                continue
+            return reopened  # no orphan record to mark: only this call could have written one
         raise StorageError("the operation kept changing while its outcome was recorded")
 
     def _orphan(self, operation: dict, external_id: str | None, note: str = REPLACED) -> dict:

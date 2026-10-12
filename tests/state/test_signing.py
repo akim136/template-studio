@@ -273,8 +273,13 @@ def test_an_unknown_outcome_after_it_was_declared_failed_reopens_it(
     assert operations.get(approved["id"]) == unknown
     with pytest.raises(Conflict, match="check its status"):  # no second, duplicate create
         create(operations, approved)
-    expected = CREATED if outcome == "timeout-after" else FAILED
-    assert operations.check_status(approved["id"])["state"] == expected
+    if outcome == "timeout-after":
+        assert operations.check_status(approved["id"])["state"] == CREATED
+        return
+    early = operations.check_status(approved["id"])  # the grace runs from when the call returned
+    assert early["state"] == NEEDS_STATUS_CHECK and "may still be running" in early["note"]
+    clock.advance(minutes=2)
+    assert operations.check_status(approved["id"])["state"] == FAILED
 
 
 def test_an_unknown_outcome_after_its_operation_was_replaced_is_kept_as_an_orphan(
@@ -295,6 +300,61 @@ def test_an_unknown_outcome_after_its_operation_was_replaced_is_kept_as_an_orpha
     assert operations.orphans(approved["id"]) == [kept]
     with pytest.raises(Conflict, match="check the provider"):
         create(operations, approve_next(services, approved))
+
+
+def test_an_unknown_outcome_after_its_replacement_failed_takes_the_slot_back(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+
+    def replaced_by_a_refused_create():
+        clock.advance(minutes=5)
+        operations.check_status(approved["id"])  # FAILED: the first create was not found yet
+        adapter.create_outcome = "refuse"
+        assert create(operations, approved)["state"] == FAILED  # holds nothing
+        adapter.create_outcome = "timeout-after"
+
+    adapter.during_create = replaced_by_a_refused_create
+    first = create(operations, approved)
+    assert first["id"] == adapter.calls[0] and first["state"] == NEEDS_STATUS_CHECK
+    assert operations.get(approved["id"]) == first
+    assert orphan(services, approved, first["id"]) is None
+    with pytest.raises(Conflict, match="check its status"):
+        create(operations, approved)
+    assert operations.check_status(approved["id"])["state"] == CREATED
+
+
+def test_an_unknown_outcome_does_not_undo_a_create_found_meanwhile(services, clock, approved):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+
+    def found_by_a_check():
+        held = Found(f"remote-{adapter.calls[0]}", digest(adapter.payloads[0]))
+        adapter.remote[adapter.calls[0]] = held  # the provider holds it before the call returns
+        assert operations.check_status(approved["id"])["state"] == CREATED
+
+    adapter.during_create = found_by_a_check
+    assert create(operations, approved)["state"] == CREATED
+    assert operations.get(approved["id"])["state"] == CREATED
+
+
+def test_an_unknown_outcome_of_a_create_found_and_replaced_since_is_not_an_orphan(
+    services, clock, approved
+):
+    operations, adapter = scripted(services, clock, create="timeout-after")
+
+    def found_then_replaced():
+        held = Found(f"remote-{adapter.calls[0]}", digest(adapter.payloads[0]))
+        adapter.remote[adapter.calls[0]] = held
+        assert operations.check_status(approved["id"])["state"] == CREATED
+        adapter.create_outcome = "ok"
+        create(operations, approve_next(services, approved))
+        adapter.create_outcome = "timeout-after"
+
+    adapter.during_create = found_then_replaced
+    answer = create(operations, approved)
+    assert answer["id"] == adapter.calls[1] and answer["state"] == CREATED
+    assert orphan(services, approved, adapter.calls[0]) is None
+    assert operations.orphans(approved["id"]) == []
 
 
 def test_a_create_reported_after_its_replacement_failed_takes_the_slot_back(
@@ -339,10 +399,11 @@ def test_an_orphan_kept_already_is_not_written_again(services, clock, approved):
     assert orphan(services, approved, kept["id"]) == kept
 
 
+@pytest.mark.parametrize("outcome", ["ok", "timeout-after"])
 def test_an_orphan_that_cannot_be_kept_is_named_in_the_error(
-    services, clock, approved, monkeypatch
+    services, clock, approved, monkeypatch, outcome
 ):
-    operations, adapter = scripted(services, clock)
+    operations, adapter = scripted(services, clock, create=outcome)
     real = services.store.put_new
 
     def failing(key, data):
@@ -350,7 +411,12 @@ def test_an_orphan_that_cannot_be_kept_is_named_in_the_error(
             raise StorageError("No space left on device")
         return real(key, data)
 
-    adapter.during_create = lambda: replaced_by_a_create(operations, clock, approved)
+    def replaced():
+        adapter.create_outcome = "ok"
+        replaced_by_a_create(operations, clock, approved)
+        adapter.create_outcome = outcome
+
+    adapter.during_create = replaced
     monkeypatch.setattr(services.store, "put_new", failing)
     with pytest.raises(StorageError, match="resolve by hand") as raised:
         create(operations, approved)
@@ -567,10 +633,11 @@ def test_an_operation_record_that_landed_but_reported_failure_does_not_block_a_r
     assert create(operations, approved)["state"] == CREATED
 
 
+@pytest.mark.parametrize("outcome", ["ok", "timeout-after"])
 def test_a_failure_to_record_the_outcome_points_to_a_status_check(
-    services, clock, approved, monkeypatch
+    services, clock, approved, monkeypatch, outcome
 ):
-    operations, adapter = scripted(services, clock)
+    operations, adapter = scripted(services, clock, create=outcome)
     real = services.store.replace
 
     def failing(key, data, etag):
