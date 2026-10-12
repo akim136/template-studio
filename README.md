@@ -4,7 +4,7 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P3 core interface, slice 4b: library, setup, record and Analyzing pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`,
+**Status: P3 core interface, slice 4c: library, setup, record, Analyzing and field editor pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`,
 which stops being accurate when this slice merges; changing it needs a scope update (guide
 section 10). The shared analysis service reads the text layer and geometry of every page, renders
 every page, and flags pages the user must look at. On the hosted studio, the Analyzing page drafts
@@ -75,8 +75,11 @@ STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0
 
 Then open `http://127.0.0.1:8773/` for the library. Setup (`/new`) uploads a PDF, takes the typed
 sponsor account and the signature policy, and saves revision 1 with no fields; the record page shows a
-saved template read-only. The analyzing screen and the field editor are not built yet. The pages
-follow the same rules as the `/api` routes below.
+saved template read-only, and its Edit fields link opens the field editor. The editor shows each page
+with the saved fields over it: add, move, resize and change fields, undo and redo, then save a new
+revision; review and approve that exact revision and run the simulated create from its review
+drawer. Drafting fields (the Analyzing page) runs on the hosted studio only. The pages follow the
+same rules as the `/api` routes below.
 
 Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503 before any body
 is read: a deployment's disk is ephemeral, so saving there would be a false Saved. The directory
@@ -90,6 +93,8 @@ names out; it is not a login, and any process on this machine is answered. A fai
 
 - `POST /api/sources` seals a PDF (raw body, at most 25 MiB) under its SHA-256, with its page
   inventory. This is the local stand-in for the direct R2 upload.
+- `GET /api/sources/{sha256}/pages/{n}.png` returns one page of a sealed source as a PNG for the
+  editor, rendered once from the sealed bytes and kept beside the source.
 - `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
   (`countersigner`, and the `required` field types per signer).
 - `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. Every save makes
