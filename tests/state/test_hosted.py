@@ -93,6 +93,13 @@ def test_sign_in_with_vercel_then_every_sign_off_carries_the_verified_email(
     monkeypatch.setattr(identity, "urllib_transport", FakeVercel())
     back = anonymous.get(f"/auth/callback?code=c&state={state}", follow_redirects=False)
     assert back.status_code == 303 and back.headers["location"] == "/auth/me"
+    session_cookie = next(
+        c.lower()
+        for c in back.headers.get_list("set-cookie")
+        if c.startswith(identity.SESSION_COOKIE)
+    )
+    for part in ("path=/", "httponly", "secure", "samesite=lax", "max-age=28800"):
+        assert part in session_cookie
     assert anonymous.get("/auth/me").json() == {
         "email": EMAIL,
         "name": "R",
@@ -114,6 +121,8 @@ def test_sign_in_with_vercel_then_every_sign_off_carries_the_verified_email(
     assert approved["review"]["by"] == EMAIL and approved["approval"]["by"] == EMAIL
 
     out = anonymous.post("/auth/logout", headers=SAME_ORIGIN)
+    cleared = out.headers["set-cookie"].lower()
+    assert cleared.startswith(identity.SESSION_COOKIE) and "max-age=0" in cleared
     assert out.json()["note"] == "signed out of the studio; this does not sign you out of Vercel"
     assert anonymous.get("/auth/me").status_code == 401
     assert anonymous.get(url).status_code == 401
@@ -165,6 +174,13 @@ def test_without_a_valid_session_state_answers_401(anonymous, clock):
     )
     anonymous.cookies.set(identity.SESSION_COOKIE, login)  # a login cookie is not a session
     assert anonymous.get(url).status_code == 401
+
+
+def test_the_session_is_checked_before_any_body_is_read(anonymous):
+    oversized = b"x" * (api.MAX_JSON_BYTES + 1)
+    url = f"/api/templates/{'0' * 32}"
+    answer = anonymous.put(url, content=oversized, headers=SAME_ORIGIN)
+    assert answer.status_code == 401
 
 
 def test_a_session_ends_after_eight_hours(client, clock):
@@ -257,6 +273,8 @@ def test_hosted_state_is_configured_from_every_setting(tmp_path):
     assert off_vercel.state == "r2"
     local_wins = api.configure({**HOSTED, api.STATE_DIR_ENV: str(tmp_path / "s")}, tmp_path / "r")
     assert local_wins.state == "local"
+    on_vercel = {**HOSTED, api.STATE_DIR_ENV: str(tmp_path / "s"), "VERCEL": "1"}
+    assert api.configure(on_vercel, tmp_path / "r").state == "r2"  # local disk never on Vercel
 
 
 @pytest.mark.parametrize(
@@ -271,6 +289,14 @@ def test_hosted_state_is_configured_from_every_setting(tmp_path):
         ({"STUDIO_PUBLIC_ORIGIN": "http://studio.example.test"}, "STUDIO_PUBLIC_ORIGIN is not"),
         ({"STUDIO_PUBLIC_ORIGIN": f"{ORIGIN}/"}, "STUDIO_PUBLIC_ORIGIN is not"),
         ({"STUDIO_PUBLIC_ORIGIN": "https://:443"}, "STUDIO_PUBLIC_ORIGIN is not"),
+        ({"STUDIO_PUBLIC_ORIGIN": "https://Studio.example.test"}, "STUDIO_PUBLIC_ORIGIN is not"),
+        ({"STUDIO_PUBLIC_ORIGIN": f"{ORIGIN}:443"}, "STUDIO_PUBLIC_ORIGIN is not"),
+        ({"STUDIO_PUBLIC_ORIGIN": f"{ORIGIN}:abc"}, "STUDIO_PUBLIC_ORIGIN is not"),
+        ({"STUDIO_PUBLIC_ORIGIN": f"{ORIGIN}?"}, "STUDIO_PUBLIC_ORIGIN is not"),
+        (
+            {"STUDIO_PUBLIC_ORIGIN": "https://user@studio.example.test"},
+            "STUDIO_PUBLIC_ORIGIN is not",
+        ),
     ],
 )
 def test_a_missing_or_malformed_setting_turns_state_off_and_is_named_never_shown(
@@ -292,6 +318,10 @@ def test_on_vercel_with_nothing_set_every_setting_is_named(tmp_path):
     assert configuration.problems == tuple(f"{name} is missing" for name in api.HOSTED_ENV)
 
 
-def test_a_local_loopback_origin_is_allowed_for_hosted_development(tmp_path):
-    environ = {**HOSTED, "STUDIO_PUBLIC_ORIGIN": "http://localhost:8771"}
-    assert api.configure(environ, tmp_path).state == "r2"
+@pytest.mark.parametrize(
+    "origin",
+    ["http://localhost:8771", "http://127.0.0.1:8771", "http://[::1]:8771", f"{ORIGIN}:8443"],
+)
+def test_canonical_origins_are_accepted(tmp_path, origin):
+    environ = {**HOSTED, "STUDIO_PUBLIC_ORIGIN": origin}
+    assert api.configure(environ, tmp_path).problems == ()

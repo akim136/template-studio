@@ -6,19 +6,20 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app import app
-from studio.state.api import auth_router
+from studio.state.api import Configuration, auth_router
 from studio.state.api import router as state_router
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_healthz_reports_truthful_status() -> None:
+def test_healthz_reports_truthful_status(monkeypatch) -> None:
+    truthful = {"status": "ok", "analysis": "NOT_IMPLEMENTED", "state": "not_configured"}
     with TestClient(app) as client:  # runs startup and shutdown
-        response = client.get("/healthz")
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-    assert response.json()["analysis"] == "NOT_IMPLEMENTED"
-    assert response.json()["state"] in ("local", "r2", "not_configured")
+        monkeypatch.setattr(app.state, "configuration", Configuration(None, "not_configured"))
+        assert client.get("/healthz").json() == truthful
+        off = Configuration(None, "not_configured", ("R2_BUCKET is missing",))
+        monkeypatch.setattr(app.state, "configuration", off)
+        assert client.get("/healthz").json() == {**truthful, "problems": ["R2_BUCKET is missing"]}
 
 
 STATE_ROUTES = {

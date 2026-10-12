@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
@@ -148,6 +149,34 @@ def test_a_write_that_landed_before_its_answer_was_lost_is_reported_as_saved():
     etag = objects.put_new("templates/a/head.json", b"mine")  # the retry meets 412, reads back
     assert objects.get("templates/a/head.json").etag == etag
     assert [m for m, _, _ in fake.requests] == ["PUT", "PUT", "GET", "GET"]
+
+
+def test_a_replace_that_landed_before_its_answer_was_lost_is_reported_as_saved():
+    fake = FakeR2()
+    objects = store(fake)
+    etag = objects.put_new("templates/a/head.json", b"one")
+    fake.script = ["land-then-drop"]
+    newer = objects.replace("templates/a/head.json", b"two", etag)  # the retry's If-Match fails
+    assert objects.get("templates/a/head.json").etag == newer
+    assert [m for m, _, _ in fake.requests][1:] == ["PUT", "PUT", "GET", "GET"]
+
+
+def test_a_broken_answer_counts_as_no_answer():
+    fake = FakeR2([http.client.IncompleteRead(b"")])
+    assert store(fake).put_new("sources/x.json", b"{}")
+    assert len(fake.requests) == 2
+    fake = FakeR2([http.client.IncompleteRead(b"")] * r2.ATTEMPTS)
+    with pytest.raises(StorageError, match="no answer .IncompleteRead"):
+        store(fake).put_new("sources/x.json", b"{}")
+
+
+@pytest.mark.parametrize("answer", [429, 409])
+def test_a_412_after_a_clear_retryable_answer_is_never_read_back(answer):
+    fake = FakeR2([answer])
+    fake.objects["templates/a/head.json"] = b"mine"  # identical bytes, written by someone else
+    with pytest.raises(PreconditionFailed):
+        store(fake).put_new("templates/a/head.json", b"mine")
+    assert [m for m, _, _ in fake.requests] == ["PUT", "PUT"]
 
 
 def test_a_412_after_a_lost_answer_stands_when_the_bytes_are_someone_elses():

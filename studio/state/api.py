@@ -126,7 +126,8 @@ def configure(environ: Mapping[str, str], repository: Path) -> Configuration:
     if not on_vercel and root:
         if Path(root).resolve().is_relative_to(repository.resolve()):
             raise RuntimeError(f"{STATE_DIR_ENV} must be outside the repository")
-        return Configuration(local_services(Path(root).absolute()), "local")  # a link is refused
+        local = local_services(Path(root).absolute())  # unresolved, so a link is seen and refused
+        return Configuration(local, "local")
     if not on_vercel and not any(environ.get(name) for name in HOSTED_ENV):
         return Configuration(None, "not_configured")
     problems = _hosted_problems(environ)
@@ -163,12 +164,27 @@ def _hosted_problems(environ: Mapping[str, str]) -> tuple[str, ...]:
         problems.append("R2_BUCKET is not a bucket name")
     if len(environ["STUDIO_SESSION_SECRET"]) < identity.MIN_SECRET_CHARS:
         problems.append(f"STUDIO_SESSION_SECRET is shorter than {identity.MIN_SECRET_CHARS}")
-    origin = urlsplit(environ["STUDIO_PUBLIC_ORIGIN"])
-    local = origin.scheme == "http" and origin.hostname in LOOPBACK
-    extras = origin.path or origin.query or origin.fragment or origin.username
-    if not (origin.scheme == "https" or local) or not origin.hostname or extras:
+    if _origin(environ["STUDIO_PUBLIC_ORIGIN"]) != environ["STUDIO_PUBLIC_ORIGIN"]:
         problems.append("STUDIO_PUBLIC_ORIGIN is not an origin like https://host")
     return tuple(problems)
+
+
+def _origin(value: str) -> str | None:
+    """The origin as a browser sends it (lowercase host, no default port), or None. Anything else
+    would never equal a request's Origin or Host, and every change would be refused."""
+    parts = urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    host = parts.hostname
+    if not host or parts.username is not None or parts.path or parts.query or parts.fragment:
+        return None
+    if not (parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK)):
+        return None
+    host = f"[{host}]" if ":" in host else host
+    default = 443 if parts.scheme == "https" else 80
+    return f"{parts.scheme}://{host}" + ("" if port in (None, default) else f":{port}")
 
 
 def report(configuration: Configuration) -> None:

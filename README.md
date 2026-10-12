@@ -128,13 +128,15 @@ not the Vercel one. Review and approval record that email. The app keeps no list
 Every hosted `/api` route needs a session (401 without one) and, for a change, a request from the
 studio's own origin (403 otherwise). Uploads skip the function body limit:
 
-- `POST /api/uploads` with `{"sha256", "size"}` returns a presigned `PUT` URL for that hash and
-  length, valid for 10 minutes. The browser sends the PDF straight to R2.
+- `POST /api/uploads` with `{"sha256", "size"}` returns a presigned `PUT` URL for the key named
+  by that hash and for that length, valid for 10 minutes. The browser sends the PDF straight to R2,
+  which does not check the bytes; seal does.
 - `POST /api/uploads/{sha256}/seal` reads the upload back, re-hashes it and seals it as a source
   (404 if nothing was uploaded, 422 if the bytes do not match the hash or are not a usable PDF).
 
 Run hosted mode locally against the bucket by setting all eight (with
-`STUDIO_PUBLIC_ORIGIN=http://localhost:8771`) and no `STUDIO_STATE_DIR`.
+`STUDIO_PUBLIC_ORIGIN=http://localhost:8771`) and no `STUDIO_STATE_DIR`. The Sign in with Vercel
+app must list `http://localhost:8771/auth/callback`; the bucket's CORS allows that origin.
 
 ## Checks
 

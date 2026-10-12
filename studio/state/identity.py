@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import http.client
 import json
 import secrets
 import urllib.error
@@ -23,7 +24,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 AUTHORIZE_URL = "https://vercel.com/oauth/authorize"
 TOKEN_URL = "https://api.vercel.com/login/oauth/token"
@@ -147,7 +148,11 @@ def finish(
     login = unseal(config.session_secret, LOGIN_COOKIE, login_cookie, now)
     if login is None:
         raise SignInFailed("the sign-in expired or did not start here; sign in again")
-    if not code or not state or not hmac.compare_digest(str(login["state"]), state):
+    if (
+        not code
+        or not state
+        or not hmac.compare_digest(str(login["state"]).encode(), state.encode())
+    ):
         raise SignInFailed("the sign-in response does not match this browser; sign in again")
     form = {
         "grant_type": "authorization_code",
@@ -184,7 +189,7 @@ def _json(
 ) -> dict:
     try:
         status, body = transport(url, form, headers, TIMEOUT_S)
-    except OSError:
+    except (OSError, http.client.HTTPException):
         raise SignInFailed(f"Vercel did not answer {step}; try again") from None
     if status != 200:
         raise SignInFailed(f"Vercel refused {step} ({status}); sign in again")
@@ -195,7 +200,3 @@ def _json(
     if not isinstance(answer, dict):
         raise SignInFailed(f"Vercel's answer to {step} was unreadable")
     return answer
-
-
-def utc_now() -> datetime:
-    return datetime.now(UTC)

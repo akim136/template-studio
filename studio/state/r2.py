@@ -4,20 +4,24 @@ Every write is conditional, as ObjectStore requires: `put_new` sends `If-None-Ma
 sends `If-Match` with the etag that was read, and R2 answers 412 when the condition fails. Requests
 are signed with AWS Signature Version 4, using only the standard library.
 
-A request that gets no answer (a network error or a timeout), or a 5xx, 429 or 409 answer, is
-retried with backoff up to ATTEMPTS times. A write whose outcome is unknown may have landed, so a
-retry that is refused with 412 reads the key back: if it holds exactly the bytes this write sent,
-the write landed and its etag is returned. Otherwise the 412 stands. When every attempt fails the
-error is a StorageError, which callers report as "may or may not have been saved".
+A request that gets no answer (a network error, a timeout or a broken response), or a 409, 429,
+500, 502, 503 or 504 answer, is tried up to ATTEMPTS times in all, with backoff. A write whose
+outcome is unknown may have landed, so a retry that is refused with 412 reads the key back: if it
+holds exactly the bytes this write sent, the write landed and its etag is returned. Otherwise the
+412 stands. When every attempt fails the error is a StorageError, which callers report as "may or
+may not have been saved".
 
 The credentials are an R2 API token limited to Object Read & Write on one bucket. They stay on the
 server: a browser gets only a presigned URL for one key and one length, valid for UPLOAD_EXPIRY_S.
+R2 does not check the bytes against the hash in the key, so anyone holding a live URL can write
+other bytes there; seal re-hashes them and refuses a mismatch.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import time
 import urllib.error
 import urllib.request
@@ -38,7 +42,8 @@ EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 RETRY_STATUSES = frozenset({409, 429, 500, 502, 503, 504})
 
 # (method, url, headers, body, timeout) -> (status, lowercase headers, body). Raises OSError
-# (urllib's URLError and TimeoutError included) when no answer arrives.
+# (urllib's URLError and TimeoutError included) when no answer arrives, or an
+# http.client.HTTPException when the answer is broken.
 Transport = Callable[[str, str, Mapping[str, str], bytes, float], tuple[int, dict, bytes]]
 
 
@@ -216,7 +221,7 @@ class R2ObjectStore:
             )
             try:
                 status, answer, data = self.transport(method, url, headers, body, TIMEOUT_S)
-            except OSError as error:  # no answer: a write may still have landed
+            except (OSError, http.client.HTTPException) as error:  # no answer, or a broken one
                 failure = f"no answer ({type(error).__name__})"
                 unknown = unknown or method == "PUT"
                 continue

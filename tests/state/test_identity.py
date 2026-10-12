@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import http.client
 import json
 from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
@@ -122,6 +123,8 @@ def test_a_response_for_another_browser_or_an_expired_start_is_refused_before_an
         identity.finish(CONFIG, "code-1", "another-state", cookie, clock(), vercel)
     with pytest.raises(identity.SignInFailed, match="does not match"):
         identity.finish(CONFIG, None, query["state"], cookie, clock(), vercel)
+    with pytest.raises(identity.SignInFailed, match="does not match"):
+        identity.finish(CONFIG, "code-1", "\u00e9", cookie, clock(), vercel)
     clock.advance(minutes=10)
     with pytest.raises(identity.SignInFailed, match="expired"):
         identity.finish(CONFIG, "code-1", query["state"], cookie, clock(), vercel)
@@ -133,6 +136,7 @@ def test_a_response_for_another_browser_or_an_expired_start_is_refused_before_an
     [
         (FakeVercel(token_status=400), r"refused the code exchange \(400\)"),
         (FakeVercel(failure=TimeoutError("synthetic")), "did not answer the code exchange"),
+        (FakeVercel(failure=http.client.IncompleteRead(b"")), "did not answer the code exchange"),
     ],
 )
 def test_vercel_failures_are_reported_without_secrets(vercel, message):
