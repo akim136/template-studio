@@ -6,9 +6,9 @@ approval, to a library record.
 
 **Status: P1 analysis spike.** The app serves only `GET /healthz`, which reports
 `"analysis": "NOT_IMPLEMENTED"` because no app route analyzes anything yet. The shared analysis
-service extracts text and geometry and inventories every page. Field drafting and self-check are
-`NOT_RUN` until model inference is authorized. There is no model client, authentication, storage or
-signing adapter yet. See
+service reads the text layer and geometry of every page, renders every page, and flags pages the
+user must look at. Field drafting and self-check are `NOT_RUN` until the model route is wired in.
+There is no authentication, storage or signing adapter yet. See
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and
 [`docs/design-import.md`](docs/design-import.md) for the design-import map.
 
@@ -34,9 +34,9 @@ uv run --locked python -m eval.analyze SOURCE.pdf > /path/outside/the/repo/run.j
 ```
 
 The wrapper calls `studio.services.analysis.analyze`, the same service the app will use. Stdout is
-one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`) and per-page
-text, geometry and status. Parser diagnostics go to stderr. Run records contain source text, so
-keep them outside the repository.
+one JSON run record: source SHA-256, the page inventory (`COMPLETE` or `INCOMPLETE`), per-page
+text, geometry and rendered-image evidence, and page flags. Sources over 50 MB are rejected. Parser
+diagnostics go to stderr. Run records contain source text, so keep them outside the repository.
 
 ## Checks
 
