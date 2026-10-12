@@ -1,7 +1,9 @@
+import io
 import json
 import re
 import uuid
 
+import pypdfium2
 import pytest
 
 from studio.state import sources
@@ -90,6 +92,17 @@ def test_a_source_record_gone_after_the_template_was_read_says_so(local, service
     )
     page = local.get(f"/templates/{template['id']}/edit")
     assert page.status_code == 503 and "sealed source" in page.text
+
+
+def test_a_source_with_no_pages_has_nothing_to_edit(local, services):
+    empty = pypdfium2.PdfDocument.new()
+    out = io.BytesIO()
+    empty.save(out)
+    source = sources.seal(services.store, out.getvalue())  # sealed, with an INCOMPLETE inventory
+    template = services.templates.create(source["sha256"], POLICY, DETAILS)
+    page = local.get(f"/templates/{template['id']}/edit")
+    assert page.status_code == 422 and "no pages" in page.text
+    assert "data-editor-data" not in page.text
 
 
 def test_a_visitor_without_a_session_is_sent_to_sign_in(visitor, hosted):

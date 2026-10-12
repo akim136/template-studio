@@ -79,7 +79,7 @@ HOSTED_ENV = (
 )
 BRANCH_URL_ENV = "VERCEL_BRANCH_URL"  # set by Vercel: the branch's host, without https://
 MAX_SOURCE_BYTES = sources.MAX_SOURCE_BYTES
-PAGE_CACHE = "private, max-age=31536000, immutable"  # a sealed source never changes
+PAGE_CACHE = "private, no-store"  # a private document: kept out of the browser cache, like pages
 MAX_JSON_BYTES = 1024 * 1024  # a template at its 2,000-field limit is about 0.5 MB
 NOT_CONFIGURED = "saved state is not configured here; nothing can be saved"
 SIGN_IN_NOT_CONFIGURED = "sign-in is not configured here"

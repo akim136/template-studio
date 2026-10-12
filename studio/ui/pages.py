@@ -268,6 +268,9 @@ async def editor(request: Request, template_id: str) -> Response:
     if source is None:
         detail = "The sealed source of this template is missing, so its pages cannot be shown."
         return _message(request, viewer, 503, "This template could not be loaded", detail)
+    if not source["pages"]:
+        detail = "The source of this template has no pages, so there is nothing to place fields on."
+        return _message(request, viewer, 422, "This template cannot be edited", detail)
     data = {
         "template": snapshot,
         "pages": source["pages"],

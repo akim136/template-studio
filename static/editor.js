@@ -21,10 +21,11 @@
   };
   const SIGNING = ["signature", "initials", "date_signed", "text", "checkbox"];
   const MERGES = ["text-merge", "checkbox-merge"];
-  const MAPPINGS = {
+  const LABELS = { // display names only; the allowed mappings are the server's data.merge_names
     name: "Investor legal name", emailAddress: "Investor contact email", homePhone: "Contact phone",
     email: "Delivery email", amount: "Subscription amount", units: "Subscription units",
   };
+  const mappings = () => data.merge_names.map((name) => [name, `${LABELS[name] || name} · ${name}`]);
   const SIZES = {
     signature: [180, 24], initials: [60, 20], date_signed: [100, 14], text: [160, 14],
     checkbox: [12, 12], "text-merge": [160, 14], "checkbox-merge": [12, 12],
@@ -89,7 +90,7 @@
     if (p.width === null) return "the page could not be measured";
     if (MERGES.includes(f.type)) {
       if (f.signer !== "sender") return "a merge field is filled by Homebase prefill";
-      if (!(f.name in MAPPINGS)) return "choose a Homebase mapping";
+      if (!data.merge_names.includes(f.name)) return "choose a Homebase mapping";
     } else if (f.signer === "sender") {
       return "only merge fields are filled by Homebase prefill";
     } else if (!(f.signer >= 0 && f.signer < roles().length)) {
@@ -481,7 +482,7 @@
       options($('[data-prop="type"]'), kinds.map((k) => [k, TYPES[k]]));
       setValue($('[data-prop="type"]'), f.type);
       $("[data-merge-row]").hidden = !MERGES.includes(f.type);
-      options($('[data-prop="name"]'), [["", "Choose from the approved list…"], ...Object.entries(MAPPINGS).map(([k, v]) => [k, `${v} · ${k}`])]);
+      options($('[data-prop="name"]'), [["", "Choose from the approved list…"], ...mappings()]);
       setValue($('[data-prop="name"]'), f.name || "");
       $("[data-merge-key]").textContent = f.name || "none";
       $$("[data-required]").forEach((b) => b.setAttribute("aria-pressed", String(String(f.required) === b.dataset.required)));
@@ -540,7 +541,7 @@
     const mergeList = $("[data-pf-merges]");
     mergeList.replaceChildren();
     if (!merges.size) fact(mergeList, "Merges", "None");
-    for (const [name, n] of merges) fact(mergeList, `${MAPPINGS[name] || name}`, `${name} × ${n}`, true);
+    for (const [name, n] of merges) fact(mergeList, `${LABELS[name] || name}`, `${name} × ${n}`, true);
     $("[data-pf-pages-title]").textContent = `Pages with fields · ${withFields.size} of ${pages.length}`;
     $("[data-pf-pages]").replaceChildren(...[...withFields].sort((a, b) => a[0] - b[0]).map(([n, count]) => el("li", {},
       el("button", { type: "button", class: "list-button", onclick: () => { page = n; selected = null; $("[data-preflight]").close(); render(); } },
@@ -670,7 +671,7 @@
     const merge = adding.signer === "sender";
     $("[data-add-merge-row]").hidden = !merge;
     const select = $("[data-add-merge]");
-    options(select, [["", "Choose from the approved list…"], ...Object.entries(MAPPINGS).map(([k, v]) => [k, `${v} · ${k}`])]);
+    options(select, [["", "Choose from the approved list…"], ...mappings()]);
     select.value = adding.name;
     const kinds = merge ? MERGES : SIGNING;
     $("[data-add-types]").replaceChildren(...kinds.map((kind) => el("button", {

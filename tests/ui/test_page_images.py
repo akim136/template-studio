@@ -1,3 +1,4 @@
+import pypdfium2
 import pytest
 
 from studio.services import render
@@ -20,7 +21,7 @@ def test_a_page_is_served_as_a_png_rendered_once(local, services, sealed, monkey
     assert first.status_code == 200, first.text
     assert first.headers["content-type"] == "image/png"
     assert first.content.startswith(PNG)
-    assert first.headers["cache-control"] == "private, max-age=31536000, immutable"
+    assert first.headers["cache-control"] == "private, no-store"  # a private document's page
     assert first.headers["x-content-type-options"] == "nosniff"
     again = local.get(f"/api/sources/{sealed}/pages/2.png")
     assert again.content == first.content
@@ -39,9 +40,10 @@ def test_an_unknown_or_malformed_source_is_not_found(local):
     assert local.get("/api/sources/NOT-A-HASH/pages/1.png").status_code == 404
 
 
-def test_a_page_that_cannot_be_rendered_says_so(local, sealed, monkeypatch):
+@pytest.mark.parametrize("error", [ValueError("no"), pypdfium2.PdfiumError("no")])
+def test_a_page_that_cannot_be_rendered_says_so(local, sealed, monkeypatch, error):
     def refuse(*args):
-        raise ValueError("no")
+        raise error
 
     monkeypatch.setattr(render, "render_png", refuse)
     answer = local.get(f"/api/sources/{sealed}/pages/1.png")

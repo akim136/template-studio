@@ -60,6 +60,32 @@ def test_an_unfinished_draft_is_resumed_not_started_again(book, template):
     assert book.latest(template["id"])["id"] == first["id"]
 
 
+def test_two_starts_that_raced_share_one_draft(book, template, services):
+    book.latest = lambda template_id: None  # each looked before the other's draft existed
+    first = book.start(template["id"], 1, "anonymous")
+    second = book.start(template["id"], 1, "anonymous")
+    assert second["id"] == first["id"]
+    assert services.store.children(f"templates/{template['id']}/drafts/") == [first["id"]]
+
+
+def test_a_start_that_never_finished_holds_its_slot_only_for_a_while(book, template, clock):
+    real_put_new = book.store.put_new
+
+    def dies_writing_pages(key, data):
+        if "/pages/" in key:
+            raise drafts.StorageError("the request died")
+        return real_put_new(key, data)
+
+    book.store.put_new = dies_writing_pages
+    with pytest.raises(drafts.StorageError):
+        book.start(template["id"], 1, "anonymous")
+    book.store.put_new = real_put_new
+    with pytest.raises(Conflict, match="starting a draft"):
+        book.start(template["id"], 1, "anonymous")
+    clock.advance(seconds=drafts.START_WINDOW.total_seconds() + 1)
+    assert book.start(template["id"], 1, "anonymous")["state"] == drafts.RUNNING
+
+
 def test_a_draft_starts_only_on_the_current_revision(book, template):
     with pytest.raises(Conflict):
         book.start(template["id"], 2, "anonymous")
@@ -90,6 +116,24 @@ def test_each_step_makes_at_most_one_call_and_the_draft_completes(book, template
     assert outcome["fields"][0]["id"] == "p0001-001" and outcome["fields"][0]["page"] == 1
 
 
+def test_a_step_reads_only_its_own_page(book, template, source, monkeypatch):
+    from studio.services import candidates
+
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake()
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight
+    opened = []
+    real = candidates._one_page
+    monkeypatch.setattr(
+        candidates, "_one_page", lambda pdf, n, w: opened.append(n) or real(pdf, n, w)
+    )
+    book.step(template["id"], draft["id"], "t", gateway_)  # stage A of page 1
+    assert opened == [1]
+    for number in (1, 2):
+        whole = [c for c in candidates.extract_candidates(source, [number]) if c.page == number]
+        assert candidates.page_candidates(source, number) == whole[0]
+
+
 def test_the_draft_sends_exactly_what_the_cli_sends(book, template, source):
     draft = book.start(template["id"], 1, "anonymous")
     in_app = fake()
@@ -113,6 +157,24 @@ def test_applying_saves_the_checked_fields_as_one_revision(book, template, servi
     assert lifecycle.status(services.templates.summaries()[0]).label == "Needs review"
     again = book.apply(template["id"], draft["id"], "anonymous")  # a retried apply
     assert again["template"]["revision"] == 2
+
+
+def test_an_apply_whose_record_was_lost_is_finished_by_a_retry(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    real_write_once = book._write_once
+
+    def fails_on_the_record(key, value):
+        if key.endswith("applied.json"):
+            raise drafts.StorageError("the request died")
+        return real_write_once(key, value)
+
+    book._write_once = fails_on_the_record
+    with pytest.raises(drafts.StorageError):  # the revision was saved, the record was not
+        book.apply(template["id"], draft["id"], "anonymous")
+    book._write_once = real_write_once
+    again = book.apply(template["id"], draft["id"], "anonymous")
+    assert again["template"]["revision"] == 2 and again["draft"]["state"] == drafts.APPLIED
 
 
 def test_a_draft_is_not_applied_over_later_edits(book, template, services):

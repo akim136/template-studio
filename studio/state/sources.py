@@ -134,7 +134,11 @@ def page_png(store: ObjectStore, sha256: str, page: int) -> bytes:
     if stored is not None:
         return stored.data
     width, height = measured["width"] or 612, measured["height"] or 792
-    data = render.render_png(source_bytes(store, sha256), page, view_scale(width, height))
+    source = source_bytes(store, sha256)
+    try:
+        data = render.render_png(source, page, view_scale(width, height))
+    except Exception as error:  # PDFium's own errors are not ValueErrors
+        raise ValueError(f"page {page}: {type(error).__name__}") from None
     try:
         store.put_new(key, data)
     except PreconditionFailed:

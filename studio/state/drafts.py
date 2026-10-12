@@ -5,7 +5,9 @@ service once and stores each page's record, so later requests read one page inst
 the document again. Each `step` then makes at most one model call: the route preflight, or stage A
 or stage B of one page, with the model route's prompts, validator and route checks
 (`studio.services.inference`). That keeps every request well inside a function's time limit, and
-lets a browser that was closed pick the draft up where it stopped.
+lets a browser that was closed pick the draft up where it stopped. Two starts that raced, each
+seeing no unfinished draft, take the same write-once start slot, and the one that lost joins the
+draft of the one that won.
 
 Before a call is sent it is claimed by writing an object that can be written only once, so two
 browsers, or a retried request, never pay for the same call twice. A claim with no result is an
@@ -32,7 +34,7 @@ from datetime import datetime, timedelta
 
 from studio.services import analysis, gateway, inference
 from studio.services.analysis import PageRecord
-from studio.services.candidates import PageCandidates, extract_candidates
+from studio.services.candidates import page_candidates
 from studio.services.fields import Field, field_dict
 from studio.services.render import PageImage
 from studio.state import sources
@@ -47,6 +49,9 @@ ROUTE = gateway.Route("openai/gpt-5.4-mini", "byok", accept_fallback=True)  # Al
 LEASE = timedelta(seconds=gateway.TIMEOUT_S + 120)
 DRAFT_ID = re.compile(r"[0-9]{8}t[0-9]{6}-[0-9a-f]{8}")
 WRITERS = 8  # parallel writes of page records at start
+# A start slot whose draft was not written by then is abandoned, and the next slot is tried.
+START_WINDOW = timedelta(minutes=2)
+START_SLOTS = 5
 
 RUNNING, DRAFTED, STOPPED, APPLIED = "RUNNING", "DRAFTED", "STOPPED", "APPLIED"
 
@@ -166,6 +171,9 @@ class Drafts:
             raise Invalid([f"the source could not be analyzed: {error}"]) from None
         now = self.clock()
         draft_id = f"{now:%Y%m%dt%H%M%S}-{uuid.uuid4().hex[:8]}"
+        winner = self._start_slot(template_id, base_revision, current, draft_id, snapshot)
+        if winner is not None:
+            return winner
         prefix = self._prefix(template_id, draft_id)
         with ThreadPoolExecutor(WRITERS) as pool:
             writes = [
@@ -202,6 +210,26 @@ class Drafts:
         }
         self.store.put_new(prefix + "draft.json", canonical(header))  # the draft exists from here
         return self.view(template_id, draft_id)
+
+    def _start_slot(self, template_id, base_revision, current, draft_id, snapshot) -> dict | None:
+        """Take the start slot that follows the latest draft this request saw, or return the
+        draft of the request that took it first."""
+        after = current["id"] if current else "none"
+        now = self.clock()
+        for slot in range(START_SLOTS):
+            key = f"templates/{template_id}/draft-starts/r{base_revision}-{after}-{slot}.json"
+            if self._write_once(key, {"draft_id": draft_id, "at": now.isoformat()}):
+                return None
+            held = self._read(key)
+            if held is None:
+                raise StorageError("a draft start slot could not be read")
+            winner = held["draft_id"]
+            if self._read(self._prefix(template_id, winner) + "draft.json") is not None:
+                return self.view(template_id, winner)
+            if now - datetime.fromisoformat(held["at"]) < START_WINDOW:
+                reason = "another request is starting a draft of this revision; try again shortly"
+                raise Conflict(reason, snapshot)
+        raise StorageError("too many draft starts of this revision were abandoned")
 
     # ---- progress ----
 
@@ -329,10 +357,7 @@ class Drafts:
         raw = self._read(f"{prefix}pages/{number:04d}.json")
         if raw is None:
             raise StorageError(f"the analysis of page {number} is missing")
-        found = extract_candidates(source, [number])
-        page = next(
-            (c for c in found if c.page == number), PageCandidates(number, [], reason="none")
-        )
+        page = page_candidates(source, number)
         evidence = inference.PageEvidence(page=number)
         return evidence, inference.prepare(source, _page_record(raw), page, evidence)
 
@@ -426,21 +451,20 @@ class Drafts:
         current = self.view(template_id, draft_id)
         if current["state"] == RUNNING:
             raise Conflict("the draft is still running", current)
-        snapshot = self.templates.get(template_id)
-        if current["state"] != APPLIED and snapshot["revision"] != current["base_revision"]:
-            raise Conflict(
-                "the template changed after this draft started; start a new draft", snapshot
-            )
         outcome = self.result(template_id, draft_id)
         if not outcome["fields"]:
             raise Invalid(["the draft has no fields to apply"])
-        saved, _ = self.templates.save(
-            template_id,
-            current["base_revision"],
-            snapshot["policy"],
-            outcome["fields"],
-            f"draft-{draft_id}",  # a retried apply returns the revision it made
-        )
+        try:  # a retried apply, even one whose record below was lost, returns the revision it made
+            saved, _ = self.templates.save(
+                template_id,
+                current["base_revision"],
+                self._header(template_id, draft_id)["policy"],  # the policy it was drafted for
+                outcome["fields"],
+                f"draft-{draft_id}",
+            )
+        except Conflict as moved:
+            reason = "the template changed after this draft started; start a new draft"
+            raise Conflict(reason, moved.current) from None
         record = {
             "revision": saved["revision"],
             "status": outcome["status"],
