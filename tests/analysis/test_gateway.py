@@ -182,6 +182,7 @@ def test_an_http_error_keeps_only_its_status_and_error_code(monkeypatch):
     with pytest.raises(gateway.GatewayError) as error:
         gateway.urllib_transport(gateway.CHAT_URL, b"{}", {})
     assert str(error.value) == "HTTP 401 from the gateway (authentication_error)"
+    assert error.value.status == 401 and error.value.refused
     assert error.value.fatal  # a bad token fails every call: stop, do not retry page by page
 
 
@@ -251,3 +252,30 @@ def test_money_stays_decimal_from_the_wire_to_the_ledger(tmp_path):
     call(book, FakeGateway(market=0.001), worst=worst)
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
     assert settle["usd"] == "0.001" and settle["market_cost"] == "0.001"
+
+
+@pytest.mark.parametrize("status", [400, 401, 429])
+def test_a_call_the_gateway_refused_settles_at_zero(tmp_path, status):
+    def refused(url, body, headers):
+        raise gateway.GatewayError(f"HTTP {status} from the gateway", status=status)
+
+    book = ledger(tmp_path)
+    with pytest.raises(gateway.GatewayError):
+        call(book, refused, worst=0.07)
+    assert book.totals() == (0.0, 0.0)
+    settle = [row for row in rows(book) if row["kind"] == "settle"][0]
+    assert settle["usd"] == "0" and settle["refused"] == f"HTTP {status} from the gateway"
+
+
+def test_astra_is_not_offered_and_the_gpt5_models_are_reasoning_models():
+    with pytest.raises(ValueError, match="no price"):
+        gateway.Route("openai/gpt-6-astra", "system")
+    for model in ("openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5.5"):
+        body = gateway.request_body(gateway.Route(model, "byok"), MESSAGES, SCHEMA, 9)
+        assert body["reasoning"]["effort"] == "medium" and "temperature" not in body
+
+
+def test_a_page_image_is_reserved_at_a_full_high_detail_patch_budget():
+    route = gateway.Route("openai/gpt-5-nano", "byok")  # 2,500 patches at 1.5 tokens each
+    price_in, _ = gateway.PRICES[route.model]
+    assert gateway.worst_case_usd(route, 0, 1, 0) >= gateway.RESERVE_FACTOR * 3750 * price_in

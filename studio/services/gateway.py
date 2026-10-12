@@ -41,21 +41,34 @@ TIMEOUT_S = 180
 FATAL_STATUSES = frozenset({401, 402, 403, 404})
 ERROR_CODE = re.compile(r"[a-z0-9_.-]{1,64}")
 
-# USD per token (input, output), from the gateway's model list on October 12, 2026.
+# The models offered, in USD per token (input, output), from the gateway's model list on
+# October 12, 2026. gpt-6-astra is not offered (Alex, October 12, 2026).
 PRICES = {
     model: (Decimal(price_in) / 1_000_000, Decimal(price_out) / 1_000_000)
     for model, (price_in, price_out) in {  # USD per million tokens
         "openai/gpt-4.1": ("2", "8"),
+        "openai/gpt-5": ("1.25", "10"),
+        "openai/gpt-5-mini": ("0.25", "2"),
+        "openai/gpt-5-nano": ("0.05", "0.4"),
+        "openai/gpt-5.2": ("1.75", "14"),
+        "openai/gpt-5.4": ("2.5", "15"),
+        "openai/gpt-5.4-mini": ("0.75", "4.5"),
+        "openai/gpt-5.4-nano": ("0.2", "1.25"),
+        "openai/gpt-5.5": ("5", "30"),
+        "openai/gpt-5.6-sol": ("4", "20"),
+        "openai/gpt-5.6-terra": ("2", "12"),
+        "openai/gpt-5.6-luna": ("0.2", "1.2"),
         "openai/gpt-6.1-sol": ("2", "10"),
         "openai/gpt-6-luna": ("0.1", "0.5"),
-        "openai/gpt-6-astra": ("10", "50"),
     }.items()
 }
 # Reasoning models take a reasoning effort instead of a temperature; the reasoning itself is
-# billed as output and is not returned.
-REASONING_MODELS = frozenset({"openai/gpt-6.1-sol", "openai/gpt-6-luna", "openai/gpt-6-astra"})
+# billed as output and is not returned. Every model offered but gpt-4.1 is one.
+REASONING_MODELS = frozenset(PRICES) - {"openai/gpt-4.1"}
 REASONING_EFFORT = "medium"
-IMAGE_TOKENS_WORST = 1600  # per page image: a high-detail page tiles to well under this
+# Per page image at high detail: patch-counted models take up to 2,500 patches at up to 1.5 tokens
+# each (gpt-5-nano); tile-counted models (gpt-4.1, gpt-5) stay under 1,500.
+IMAGE_TOKENS_WORST = 3750
 RESERVE_FACTOR = Decimal("1.5")  # headroom over the token estimate
 MICRO = Decimal("0.000001")
 
@@ -70,9 +83,14 @@ class GatewayError(Exception):
     """The call failed; the message never contains the token or the response body. A fatal
     error would fail every later call the same way, so the run stops."""
 
-    def __init__(self, message: str, fatal: bool = False):
+    def __init__(self, message: str, fatal: bool = False, status: int | None = None):
         super().__init__(message)
-        self.fatal = fatal
+        self.fatal, self.status = fatal, status
+
+    @property
+    def refused(self) -> bool:
+        """The gateway answered HTTP 4xx: it refused the request, so nothing was generated."""
+        return self.status is not None and 400 <= self.status < 500
 
 
 @dataclass(frozen=True)
@@ -123,7 +141,9 @@ def urllib_transport(url: str, body: bytes | None, headers: dict[str, str]) -> b
         code = _error_code(error)
         detail = f" ({code})" if code else ""
         raise GatewayError(
-            f"HTTP {error.code} from the gateway{detail}", fatal=error.code in FATAL_STATUSES
+            f"HTTP {error.code} from the gateway{detail}",
+            fatal=error.code in FATAL_STATUSES,
+            status=error.code,
         ) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
         raise GatewayError(f"no response from the gateway ({type(error).__name__})") from None
@@ -273,8 +293,15 @@ def call(
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = json.dumps(request_body(route, messages, schema, max_output_tokens)).encode()
     started = time.monotonic()
-    # A failure or an unreadable response leaves the reservation unsettled, at its worst case.
-    response = _parse(transport(CHAT_URL, body, headers))
+    # A refused call settles at $0 (Alex, October 12, 2026). Any other failure, or an unreadable
+    # response, leaves the reservation unsettled, at its worst case.
+    try:
+        raw = transport(CHAT_URL, body, headers)
+    except GatewayError as error:
+        if error.refused:
+            ledger.settle(reservation, Decimal(0), {"model": route.model, "refused": str(error)})
+        raise
+    response = _parse(raw)
     seconds = time.monotonic() - started
 
     usage = _dict(response.get("usage"))
