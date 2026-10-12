@@ -1,0 +1,229 @@
+# Homebase Template Studio: project guide
+
+**Revision 1.0.14-repo.1 · October 11, 2026 · Owner: Alex Kim**
+**Status:** P0 foundation (PR1) is a local PR-ready diff awaiting Alex's review.
+- Analysis is NOT_IMPLEMENTED.
+- Vercel access is NOT_APPLIED.
+- There is no remote, deployment or inference, and no phase has advanced.
+
+This is the canonical guide for this repository. It condenses the private kickoff (guide 1.0.14, PR plan, implementation acceptance, quality and model gate, access runbook) into public-safe requirements.
+
+The following stay in that private kickoff, outside Git:
+- historical evidence;
+- private case identities;
+- the access roster.
+
+Amend this file deliberately in the PR that changes behavior or status. Never replace it with a chat export.
+
+## 1. Decisions and precedence
+
+Precedence, highest first:
+1. Alex's latest explicit decisions and this repository's policy.
+2. This guide.
+3. The current PR plan and quality contract in the private kickoff.
+4. Claude Design exports, which are appearance and interaction reference only.
+5. Older plans and historical evidence.
+
+| ID | Decision |
+|---|---|
+| D1 | A parallel internal app. The existing Claude skill, upload host, MCP, signing account, production infrastructure and other repositories stay unchanged. No cutover is required. |
+| D2 | The stack is Python 3.13, uv, FastAPI, Jinja/HTML/CSS and limited browser JavaScript. Excluded: a Node or Next.js backend, a Python-in-browser runtime, a framework switch, and any shared cross-project platform. |
+| D3 | Keep R2 behind a narrow, independently authenticated Cloudflare adapter. Keep a signing adapter that is simulated by default. |
+| D4 | Access uses Vercel Authentication with All Deployments protection and named access for seven people. Its status is NOT_APPLIED (section 6). |
+| D5 | Seven PR-sized stages with one active phase. No automatic merge or phase advancement (section 3). |
+| D6 | The UI and the evaluation runner call the **same** Python analysis service. |
+
+## 2. Workspace record (PR1)
+
+| Field | Value |
+|---|---|
+| Repository | Fresh local Git repository created for this isolated session. The kickoff packet and design archive sit outside the Git root, unchanged. No remote. |
+| Isolation | Independent of earlier Template Studio checkouts and the parallel Paul Lab session. Nothing was copied from them or changed in them. |
+| Branches | `main` holds the bootstrap commit, and `chore/studio-foundation` holds PR1. |
+| Local preview | `127.0.0.1:8773`. The preferred ports 8771 and 8772 were held by other sessions. |
+| Budget | Elapsed and remaining assessment time is UNKNOWN until Alex records it. Inference spend is $0, and none is authorized. |
+| Private inputs | Not supplied to this workspace. Hashing and page inventory are NOT RUN. This is a PR2 precondition. |
+
+## 3. Seven PR-sized stages
+
+| PR | Phase and branch | Deliverable | Gate before the next phase |
+|---|---|---|---|
+| 1 | P0 `chore/studio-foundation` | **Foundation:** FastAPI skeleton with `GET /healthz`, locked tooling, focused privacy checks, one CI workflow, this guide, the design-import map and phase declarations. | Alex's manual bootstrap acceptance. No private or answer-bearing artifacts in history. |
+| 2 | P1 `spike/studio-analysis` | **Real analysis proof** on real source bytes:<br>• audited generic extraction;<br>• full page inventory;<br>• bounded classification and self-check;<br>• first and self-checked drafts preserved;<br>• stderr kept separate from JSON.<br>One service for both the app and the evaluator wrapper. | One honest, unmodified initial analysis is preserved when inference is authorized. No answer leakage. No parity claim based on a model label. |
+| 3 | P2 `feat/studio-state-boundary` | **State, approval and authenticated external boundary:**<br>• direct R2 upload and sealed source;<br>• revision store;<br>• policy validation;<br>• working vs saved state;<br>• revision-bound review and approval;<br>• no-side-effect signing adapter;<br>• uncertain-operation handling.<br>Vercel protection is configured at the authorized deployment gate, before any sharing. | Stale saves and stale approvals are rejected server-side. Source identity stays consistent. At most two targeted development iterations. |
+| 4 | P3 `feat/studio-core-ui` | **Selected core interface:** library, setup and editor from the approved import rows, with real upload, analysis, save and review, and simulated create. The mock login is removed. | Alex corrects real generated fields, saves, reloads, and reconfirms review after consequential edits. |
+| 5 | P4a `test/studio-model-decision` | **Baseline comparison and model decision:** the agreed development comparison, plus the bounded two-profile study when authorized. | AI-draft quality, reviewed correctness and operator effort are reported separately. Missing references or budget means REVIEW_REQUIRED. |
+| 6 | P4b `test/studio-release-evidence` | **Release evidence:**<br>• approval bypass;<br>• conflict and discard;<br>• geometry and zoom;<br>• parser errors;<br>• unsupported input;<br>• missing pages;<br>• duplicate unknown create;<br>• data separation;<br>• access checks. | Critical tests pass. Unrun checks are reported. |
+| 7 | P5 `docs/studio-case-study` | **Case study and authorized reviewer access:** verified named access for each submitted URL, synthetic data only, no bypass link. | A real deployed thin slice is presented, with its limits stated. |
+
+One branch and diff per stage. Advancing a phase is a separate `scope_update` change that Alex reviews (section 8). Local-only work is described as a "local PR-ready diff", not an opened PR. The seven stages do not grant seven new time budgets.
+
+## 4. Product journey, scope and state rules
+
+**Journey:**
+1. Vercel-managed admission
+2. Library
+3. Sponsor selection
+4. Upload a supported PDF, or use a clearly labeled synthetic sample
+5. Explicit signer policy
+6. Actual AI field draft
+7. Field correction
+8. Acknowledged save
+9. Current-revision review confirmation and approval
+10. Simulated create and verify
+11. Accurate library record
+
+**Out of scope:**
+- an extra review or issue queue;
+- new field types;
+- an account-management product;
+- a model UI or selector;
+- a custom login;
+- a conditional-form engine.
+
+**State rules (PR3 server, PR4 UI):**
+- **Saving.** Working edits stay separate from acknowledged saved revisions. A storage failure never shows Saved. Conflict, discard and reload restore the right snapshot.
+- **Review and approval are bound to a revision.** Confirmation and approval bind to the saved source, policy and field revision.
+  - Consequential edits clear them, including undo/redo and signer-policy changes.
+  - Zoom and selection do not clear them.
+  - A stale approval sent directly to the API is rejected.
+- **Required fields.** Required fields come from the case's signing policy. An empty map is blocked. There is no universal LP-signature rule.
+- **Lifecycle labels.** Creating, Verifying, Needs status check (unknown) and Failed are distinct states.
+  - An unknown outcome keeps its operation ID and offers only a status check.
+  - There is no blind duplicate create.
+- **Sample data.** A new file never shows sample-fixture fields. There is no silent fallback to the sample.
+
+**Coordinates and policy:**
+- Coordinates are 72-point, top-left, per-page source coordinates. `document_index` is zero-based and `page` is one-based.
+- The merge whitelist is `name`, `emailAddress`, `homePhone`, `email`, `amount`, `units`.
+- Roles are `Client` (index 0) and, when the policy allows a countersigner, `CounterSigner` (index 1).
+
+## 5. Analysis and quality requirements (PR2 onward)
+
+- **One service.** One Python analysis entrypoint serves both the UI and the evaluation wrapper. The wrapper may supply local bytes and no-side-effect adapters. It must never fork the parser, prompt, image policy, validator or self-check.
+- **Three stages:**
+  - A: first AI draft;
+  - B: post-self-check, pre-human draft;
+  - C: human corrections.
+
+  Each is a separate, immutable record. A human correction is not an AI quality improvement.
+- **Run record.** Each run records:
+  - exact source identity (byte hash) and the full page inventory;
+  - a per-page evidence ledger: text, geometry, image rendered, image submitted, inspection received, and any skipped, unsupported or error reason;
+  - failures;
+  - the requested and actual model and provider for each stage;
+  - retries, usage and time.
+
+  Missing pages, truncated output or invalid output never count as a complete analysis.
+- **Diagnostics stay out of JSON.** Parser diagnostics go to stderr, and JSON output stays parseable. A regression test is required. One development case printed parser diagnostics on stdout and broke its JSON output.
+- **Underscores are not templates.** Underscore-run extraction is a mechanics capability, not complete templatization. Drawn rules, checkboxes and label-only fields are capabilities to measure, not to drop silently.
+- **No substitutes.** Sample or fixture fields never stand in for real analysis.
+- **Generator isolation.** The generating model's requests and tools receive only the source PDF, approved business rules and scoped tools. They must never reach:
+  - baseline outputs;
+  - per-case field recipes;
+  - answer-bearing overlays;
+  - annotations;
+  - evaluator reports.
+
+  Separate folders, `.gitignore` or `chmod` do not establish isolation. PR2 needs a test showing that evaluator material cannot be retrieved.
+- **Development cases.**
+  - `dev-a` (97 pages) and `dev-b` (64 pages) are private, *exposed* development cases, not holdouts.
+  - Their references are UNREVIEWED.
+  - Baseline answers stay unopened until the evaluator work.
+- **Model decision:**
+  - Keep the first unmodified candidate result.
+  - Allow at most two targeted development iterations, each with a diff, a linked test and a full development-set rerun.
+  - Compare at most two model profiles on a frozen harness, and only when separately authorized.
+  - No hidden provider fallback. Keep every trial.
+  - The status is UNSELECTED, PROVISIONAL_DEVELOPMENT or SELECTED_FOR_SUPERVISED_PILOT.
+  - A working editor or valid JSON does not establish model quality.
+- **Live inference** is an explicit, authorized, budgeted run. CI never triggers it.
+
+## 6. Access (decided, NOT_APPLIED)
+
+- **Mechanism:** Vercel Authentication with All Deployments protection, and named deployment access for the seven people in the private roster. The roster stays out of Git, client code and fixtures.
+- **Not allowed:** a custom login, an email-domain gate, a bearer bypass link, a shared password, an automatic plan upgrade, or an assumed application reviewer identity.
+- **Admission is not app identity.** Vercel admission does not make someone a verified application actor. Until identity is deliberately added, demo actions are recorded as anonymous to the app.
+- **Cloudflare adapter.** It requires its own authenticated boundary. Vercel cookies are not forwarded, and no bypass secret goes to the browser.
+- **Reviewer data.** Shared reviewer demos use synthetic data only. Real create and send are disabled server-side.
+- **At the authorized deployment phase:**
+  - verify the actual team, project, plan and effective access;
+  - test signed-out, listed, non-listed, direct-API and alternate-URL access;
+  - record only what was observed.
+- **PR1 status:** team, project and plan are unverified. Protection and invitations are NOT_APPLIED.
+
+## 7. Design source (reference only)
+
+| Item | Value |
+|---|---|
+| Received archive | `Homebase Template Studio Prototype (4).zip`, SHA-256 `d23cb2f6c7b9125ac3804d18f13c0e987639f4596e3cb1c60d8dbea4cb365c08`. Newer than the reviewed (3) archive (`53dd96598e36…ffd0a`) and not yet reviewed by the kickoff. |
+| Canonical entrypoint | `Template Studio Clean.dc.html` v2.3, SHA-256 `94a7b7b0880e80fbeec83852e47ede7c6535eac1a2ab3c4616f2cab6596c790f` |
+| Lineage | `baseline/v2` is the reviewed (3) file (`7014350b8a3c…cecb`). `baseline/v2.1` is `139bdd521880…63d4`. |
+| Backend | NOT ESTABLISHED. It is a React 18 prototype using localStorage and fixtures. |
+
+Conflicts are recorded here. They are rejected at import, not fixed through another design round:
+1. A client fixture (`fixtures/clean/studio.json`, `access.allowlist`) embeds the named access list. **Reject.** The roster never enters this repository or any client.
+2. A mock "Sign in with your Vercel account" screen and signed-in-person attribution. **Reject.**
+3. The archive's handoff suggests the app re-check the named emails server-side and attribute approvals to them. **Reject for now.** Managed admission is not verified app identity (section 6).
+4. It ships font binaries, `uploads/` (including a demo PDF) and a `model_configuration` fixture, although its handoff says these are excluded. **Do not import.** There is no model UI.
+
+Per-component decisions are in `docs/design-import.md`.
+
+## 8. Phase control and checks
+
+**Phase files.** `docs/phase_scope.json` holds the active phase, features, permitted paths and scope files. `docs/phase_change.json` is the current PR's fresh declaration.
+
+**Phase check.** `python3 scripts/check_repo.py phase --base main` reads the policy from the **base** revision, so a feature PR cannot widen its own allowlist. It requires:
+- a fresh declaration;
+- a guide update;
+- a matching phase;
+- declared feature IDs;
+- changed paths inside those features.
+
+A `kind: scope_update` change may touch only scope files, the declaration and this guide. It cannot bundle operational changes. Exit code 3 means BOOTSTRAP_REQUIRED.
+
+**Merge gate.** Run the checker from the base revision, not from the branch:
+```sh
+base=$(mktemp) && git show main:scripts/check_repo.py > "$base" \
+  && python3 "$base" phase --base main; echo "exit $?"
+```
+For PR1, `main` has no policy, so the result is BOOTSTRAP_REQUIRED. Alex's manual review is the gate.
+
+**Limits:**
+- CI runs code from the PR, so it is a backstop, not a tamper-proof gate.
+- A JSON field cannot authenticate a reviewer.
+- Checks cannot prove that code inside an allowed file stays in scope. Human diff review remains required.
+
+**Privacy check.** `python3 scripts/check_repo.py private --staged|--all-history [--denylist FILE]`.
+- The denylist of exact protected emails and specific confidential identifiers lives outside Git.
+- Hosted CI runs without the denylist, so it checks only the generic rules.
+- Before any reviewer that sends source outside the workspace, run the denylist check on the review payload and on history.
+
+**CI.** One ordinary workflow with read-only permissions, no secrets and no `pull_request_target`.
+
+## 9. Session record
+
+| Field | Value |
+|---|---|
+| Phase | P0 (PR1). Local PR-ready diff. Not accepted. |
+| Reviews | Read-only reviewer subagent and `/codex-review`. Results are recorded in the PR1 gate report. Alex is the approver. |
+| Analysis | NOT_IMPLEMENTED |
+| Vercel access | NOT_APPLIED |
+| Hosted CI | NOT RUN, because there is no remote. |
+| Private inputs | NOT RUN, because they were not supplied. |
+| Inference | None. $0. |
+| Next | Alex reviews PR1, then an Alex-reviewed `scope_update` to P1. |
+
+## 10. Open decisions
+
+- The assessment time budget, both elapsed and remaining.
+- The private-PDF location for this workspace, and evaluator-only storage for the baseline.
+- The PDF library and its license (for example, AGPL versus commercial) before parser adoption, plus a native-dependency smoke test on the deployment runtime.
+- The model route, provider restriction and spend cap. Reference adjudication and tolerances.
+- The remote owner, visibility and timing.
+- The test client: adopt `httpx2`, which Starlette 1.7 prefers, or keep `httpx` with the single targeted warning filter.
+- Whether to send the design (4) conflicts back to Design, or only reject them at import.
+
+| Revision | Change |
+|---|---|
+| 1.0.14-repo.1 | Repository guide created from kickoff 1.0.14 for the isolated PR1 foundation. |
