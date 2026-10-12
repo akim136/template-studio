@@ -87,6 +87,8 @@ def parse_details(raw: object) -> dict:
         if len(value) > limit or not value.isprintable():
             errors.append(f"details.{key} is printable text of at most {limit} characters")
         details[key] = value
+    if "sponsor_name" in details and not details["sponsor_name"]:
+        errors.append("details.sponsor_name names the sponsor account")
     account = details.get("sponsor_account_id")
     if account and not ACCOUNT_ID.fullmatch(account):
         errors.append("details.sponsor_account_id is letters, digits, '_', '.', ':' or '-'")
@@ -121,26 +123,24 @@ class Templates:
         row = {"id": template_id, "saved_at": None, "error": None}
         try:
             head, _ = self.head(template_id)
-            key = f"templates/{template_id}/revisions/{head['object']}.json"
-            stored = self.store.get(key)
-            if stored is None or hashlib.sha256(stored.data).hexdigest() != head["object"]:
-                raise StorageError(f"revision {head['revision']} is missing or altered")
-            revision = json.loads(stored.data)
+            revision = self._revision(head)
             operation = self.store.get(f"templates/{template_id}/operation.json")
+            return {
+                **row,
+                "revision": head["revision"],
+                "binding": head["binding"],
+                "details": revision.get("details", DETAILS),
+                "countersigner": revision["policy"]["countersigner"],
+                "field_count": len(revision["fields"]),
+                "saved_at": revision["saved_at"],
+                "review": head["review"],
+                "approval": head["approval"],
+                "operation": None if operation is None else json.loads(operation.data),
+            }
         except (StorageError, NotFound) as error:
             return {**row, "error": str(error) or "missing"}
-        return {
-            **row,
-            "revision": head["revision"],
-            "binding": head["binding"],
-            "details": revision.get("details", DETAILS),
-            "countersigner": revision["policy"]["countersigner"],
-            "field_count": len(revision["fields"]),
-            "saved_at": revision["saved_at"],
-            "review": head["review"],
-            "approval": head["approval"],
-            "operation": None if operation is None else json.loads(operation.data),
-        }
+        except (ValueError, KeyError, TypeError) as error:  # a malformed stored record
+            return {**row, "error": f"a stored record is malformed ({type(error).__name__})"}
 
     def save(
         self,
@@ -204,11 +204,7 @@ class Templates:
         return json.loads(stored.data), stored.etag
 
     def snapshot(self, head: dict) -> dict:
-        key = f"templates/{head['template_id']}/revisions/{head['object']}.json"
-        stored = self.store.get(key)
-        if stored is None or hashlib.sha256(stored.data).hexdigest() != head["object"]:
-            raise StorageError(f"revision {head['revision']} is missing or altered")
-        revision = json.loads(stored.data)
+        revision = self._revision(head)
         record = sources.load(self.store, head["source_sha256"])
         if record is None:
             raise StorageError(f"the sealed source of revision {head['revision']} is missing")
@@ -307,12 +303,16 @@ class Templates:
             raise  # the caller reads the head again
         return head
 
-    def _details(self, head: dict) -> dict:
+    def _revision(self, head: dict) -> dict:
+        """The revision `head` points to, checked against its hash."""
         key = f"templates/{head['template_id']}/revisions/{head['object']}.json"
         stored = self.store.get(key)
         if stored is None or hashlib.sha256(stored.data).hexdigest() != head["object"]:
             raise StorageError(f"revision {head['revision']} is missing or altered")
-        return json.loads(stored.data).get("details", DETAILS)
+        return json.loads(stored.data)
+
+    def _details(self, head: dict) -> dict:
+        return self._revision(head).get("details", DETAILS)
 
     def _source(self, sha256: object) -> dict:
         try:

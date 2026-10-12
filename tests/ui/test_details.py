@@ -62,6 +62,7 @@ def test_a_template_created_without_details_has_blank_ones(local):
         {**TYPED, "title": 7},
         {**TYPED, "title": "x" * 201},
         {**TYPED, "sponsor_name": "line\u0000break"},
+        {**TYPED, "sponsor_name": "   "},  # supplied details name the sponsor
         {**TYPED, "sponsor_account_id": "has space"},
         {**TYPED, "sponsor_account_id": "-leading"},
         {**TYPED, "sponsor_account_id": "a" * 65},

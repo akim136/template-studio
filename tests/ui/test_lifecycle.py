@@ -101,3 +101,21 @@ def test_a_listing_that_cannot_be_read_is_a_503_not_an_empty_library(local, serv
     monkeypatch.setattr(services.store, "children", broken)
     answer = local.get("/api/templates")
     assert answer.status_code == 503 and "nothing" not in answer.text.lower()
+
+
+@pytest.mark.parametrize("bad", ["head.json", "operation.json"])
+def test_a_malformed_record_marks_its_row_and_the_rest_still_list(services, clock, bad):
+    source = sources.seal(services.store, two_page_pdf())
+    broken = services.templates.create(source["sha256"], POLICY)
+    clock.advance(minutes=1)
+    fine = services.templates.create(source["sha256"], POLICY)
+    key = f"templates/{broken['id']}/{bad}"
+    stored = services.store.get(key)
+    if stored is None:
+        services.store.put_new(key, b"{truncated")
+    else:
+        services.store.replace(key, b"{truncated", stored.etag)
+    rows = {row["id"]: row for row in services.templates.summaries()}
+    assert "malformed" in rows[broken["id"]]["error"]
+    assert lifecycle.status(rows[broken["id"]]).label == "Unreadable"
+    assert rows[fine["id"]]["error"] is None
