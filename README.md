@@ -39,6 +39,20 @@ text, geometry and rendered-image evidence, and flags (per page, or `page: null`
 document). Sources over 50 MiB are rejected. Parser diagnostics go to stderr. Run records contain
 source text, so keep them outside the repository.
 
+## Draft fields through the model route
+
+```sh
+uv run --locked python -m eval.infer SOURCE.pdf --model openai/gpt-4.1 --credential byok \
+    --roles Client,CounterSigner --signer-mode MODE --run-cap 2.00 \
+    --ledger PRIVATE/spend-ledger.jsonl --env-file PRIVATE/.env.local --out PRIVATE/run.json
+```
+
+Calls go through Vercel AI Gateway to OpenAI only, with no tools and no fallback models. Every
+route choice and cap is explicit. A call on another model, provider or credential stops the run
+(`ROUTE_VIOLATION`), and a call that could cross the run cap or the $10 total is never sent
+(`BUDGET_STOPPED`). The record (source text and model answers) is written read-only to `--out`,
+which must be outside the repository. Stdout gets a summary with counts and spend only.
+
 ## Checks
 
 ```sh

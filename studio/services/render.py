@@ -81,8 +81,15 @@ def _chunk(tag: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
 
-def render_png(source: bytes, page_number: int, scale: float) -> bytes:
-    """One page (one-based) as an RGB PNG, for submission to a model."""
+@dataclass(frozen=True)
+class RgbImage:
+    width: int
+    height: int
+    rows: list[bytes]  # RGB, three bytes per pixel, no padding
+
+
+def render_rgb(source: bytes, page_number: int, scale: float) -> RgbImage:
+    """One page (one-based) as RGB pixel rows, bounded by MAX_RENDER_PIXELS."""
     if not scale > 0:
         raise ValueError(f"scale must be positive, got {scale}")
     with _LOCK:
@@ -103,11 +110,20 @@ def render_png(source: bytes, page_number: int, scale: float) -> bytes:
             pdf.close()
     if channels != 3:
         raise ValueError(f"expected an RGB bitmap, got {channels} channel(s)")
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    pixels = zlib.compress(b"".join(b"\x00" + row for row in rows), 6)
+    return RgbImage(width, height, rows)
+
+
+def encode_png(image: RgbImage) -> bytes:
+    header = struct.pack(">IIBBBBB", image.width, image.height, 8, 2, 0, 0, 0)
+    pixels = zlib.compress(b"".join(b"\x00" + row for row in image.rows), 6)
     return (
         b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", header)
         + _chunk(b"IDAT", pixels)
         + _chunk(b"IEND", b"")
     )
+
+
+def render_png(source: bytes, page_number: int, scale: float) -> bytes:
+    """One page (one-based) as an RGB PNG, for submission to a model."""
+    return encode_png(render_rgb(source, page_number, scale))

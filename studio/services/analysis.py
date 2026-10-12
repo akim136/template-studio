@@ -1,8 +1,9 @@
 """The one analysis service. The app and the evaluation wrapper both call ``analyze``.
 
 This slice covers generic extraction and a full page inventory over the source bytes: the text
-layer and geometry from pypdf, and a rendered image of every page from PDFium. Field drafting
-(stage A) and self-check (stage B) report NOT_RUN until the model route is wired in.
+layer and geometry from pypdf, and a rendered image of every page from PDFium. It never calls a
+model: field drafting (stage A) and self-check (stage B) live in studio.services.inference, which
+takes this record as its input, so its own stage fields report NOT_RUN.
 
 The service takes bytes and returns a record. It opens no files from Python and makes no network
 calls. PDFium is native code and may read system font files to draw fonts a PDF does not embed;
@@ -24,7 +25,7 @@ from pypdf.errors import DependencyError, FileNotDecryptedError, PyPdfError
 
 from studio.services.render import RENDERER, PageImage, inventory_images
 
-INFERENCE_NOT_RUN = "NOT_RUN: model inference is not wired in yet"
+INFERENCE_NOT_RUN = "NOT_RUN: analyze() never calls a model; stages A and B run in eval.infer"
 NO_TEXT_REASON = "no extractable text layer"
 MAX_SOURCE_BYTES = 50 * 1024 * 1024  # the agreed ceiling (guide §10)
 # A mechanics signal only. An underscore run is not a templated field.
