@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -85,6 +86,46 @@ def test_failures_are_still_json_with_a_nonzero_exit(tmp_path):
         proc = run_wrapper(str(path))
         assert proc.returncode == 1
         assert json.loads(proc.stdout)["status"] == "FAILED"
+
+
+def test_an_oversize_source_is_never_read_whole(tmp_path, monkeypatch, capsys):
+    """The cap holds before the bytes are in memory: the record still has the full hash."""
+    source = tmp_path / "big.pdf"
+    data = make_pdf(["big"]) + b"%" * 4096
+    source.write_bytes(data)
+    monkeypatch.setattr(wrapper, "MAX_SOURCE_BYTES", 1024)
+    monkeypatch.setattr(wrapper, "CHUNK_BYTES", 512)
+    reads = []
+    real_open = pathlib.Path.open
+
+    def tracking_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        real_read = handle.read
+
+        def read(size=-1):
+            reads.append(size)
+            return real_read(size)
+
+        handle.read = read
+        return handle
+
+    monkeypatch.setattr(pathlib.Path, "open", tracking_open)
+    assert wrapper.main([str(source)]) == 1
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "FAILED" and "limit" in record["error"]
+    assert record["source_bytes"] == len(data)
+    assert record["source_sha256"] == hashlib.sha256(data).hexdigest()
+    assert reads and all(0 < size <= 1025 for size in reads), reads
+
+
+def test_a_source_that_is_not_a_regular_file_fails_without_blocking(tmp_path):
+    fifo = tmp_path / "pipe.pdf"
+    os.mkfifo(fifo)
+    for path in (fifo, tmp_path):
+        proc = run_wrapper(str(path))
+        assert proc.returncode == 1
+        record = json.loads(proc.stdout)
+        assert record["status"] == "FAILED" and "regular file" in record["error"]
 
 
 HOOK = """

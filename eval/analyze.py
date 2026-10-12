@@ -13,12 +13,21 @@ from __future__ import annotations
 import argparse
 import contextlib
 import ctypes
+import hashlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
-from studio.services.analysis import AnalysisError, analyze
+from studio.services.analysis import (
+    MAX_SOURCE_BYTES,
+    AnalysisError,
+    analyze,
+    oversize_message,
+)
+
+CHUNK_BYTES = 1024 * 1024
 
 
 @contextlib.contextmanager
@@ -37,6 +46,24 @@ def _stdout_to_stderr():
         os.close(saved)
 
 
+def _read_source(path: Path) -> bytes:
+    """The source's bytes. Only a regular file is opened, and an oversize file is hashed in
+    chunks for its failure record but never held in memory whole."""
+    if not stat.S_ISREG(path.stat().st_mode):  # a FIFO or device could block or never end
+        raise OSError(f"not a regular file: {path}")
+    with path.open("rb") as handle:
+        data = handle.read(MAX_SOURCE_BYTES + 1)
+        if len(data) <= MAX_SOURCE_BYTES:
+            return data
+        digest, size = hashlib.sha256(data), len(data)
+        while chunk := handle.read(CHUNK_BYTES):
+            digest.update(chunk)
+            size += len(chunk)
+    error = AnalysisError(oversize_message(size), b"", [])
+    error.source_sha256, error.source_bytes = digest.hexdigest(), size
+    raise error
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m eval.analyze", description=__doc__)
     parser.add_argument("source", type=Path, help="the source PDF")
@@ -45,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     stdout = sys.stdout
     with _stdout_to_stderr():
         try:
-            record, code = analyze(args.source.read_bytes()).to_dict(), 0
+            record, code = analyze(_read_source(args.source)).to_dict(), 0
         except AnalysisError as error:
             record, code = error.to_dict(), 1
         except OSError as error:

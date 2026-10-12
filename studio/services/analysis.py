@@ -213,12 +213,15 @@ def _document_flags(found: int, declared: int | None, rendered: int | None) -> l
     return flags
 
 
+def oversize_message(size: int) -> str:
+    limit = f"{MAX_SOURCE_BYTES} bytes ({MAX_SOURCE_BYTES / 2**20:g} MiB)"
+    return f"the source is {size} bytes; the limit is {limit}"
+
+
 def analyze(source: bytes) -> AnalysisResult:
     """Inventory every page of a PDF given as bytes."""
     if len(source) > MAX_SOURCE_BYTES:
-        limit = f"{MAX_SOURCE_BYTES} bytes ({MAX_SOURCE_BYTES / 2**20:g} MiB)"
-        message = f"the source is {len(source)} bytes; the limit is {limit}"
-        raise AnalysisError(message, source, [])
+        raise AnalysisError(oversize_message(len(source)), source, [])
     with _parser_diagnostics() as diagnostics:
         try:
             pages, declared = _read(source)
