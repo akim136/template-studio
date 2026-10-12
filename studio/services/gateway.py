@@ -72,11 +72,13 @@ PRICES = {
 # billed as output and is not returned. Every model offered but gpt-4.1 is one.
 REASONING_MODELS = frozenset(PRICES) - {"openai/gpt-4.1"}
 REASONING_EFFORT = "medium"
-# Image input tokens at high detail, from OpenAI's vision guide on October 12, 2026. Tile models
-# cost a base plus a count per 512 px tile; patch models a multiplier per 32 px patch. A patch
-# budget only ever shrinks an image, so counting the patches of the image as sent is an upper
-# bound. The guide has no rule for the UNPUBLISHED models, so they are reserved at whichever is
-# larger: the guide's largest multiplier, or gpt-4.1's tiles.
+# Image input tokens at high detail, from OpenAI's vision guide as read on October 12, 2026
+# (https://developers.openai.com/api/docs/guides/images-vision). Tile models cost a base plus a
+# count per 512 px tile; patch models a multiplier per 32 px patch. A patch budget only ever
+# shrinks an image, so counting the patches of the image as sent is an upper bound. The guide
+# marks gpt-5-mini, gpt-5-nano and o4-mini as deprecated and scheduled for shutdown. It has no rule
+# for the UNPUBLISHED models, so they are reserved at whichever is larger: the guide's largest
+# multiplier, or gpt-4.1's tiles.
 TILES = {"openai/gpt-4.1": (85, 170), "openai/gpt-5": (70, 140)}  # (base, per tile)
 PATCH_MULTIPLIERS = {
     model: Decimal(multiplier)
@@ -103,6 +105,10 @@ Transport = Callable[[str, bytes | None, dict[str, str]], bytes]
 
 class RouteViolation(Exception):
     """The gateway used a model, provider or credential other than the one requested."""
+
+    def __init__(self, message: str, fell_back: bool = False):
+        super().__init__(message)
+        self.fell_back = fell_back
 
 
 class GatewayError(Exception):
@@ -150,7 +156,7 @@ class CallResult:
     market_cost_usd: Decimal
     seconds: float
     failed_attempts: list[str] = field(default_factory=list)  # provider/credential/status
-    fell_back: bool = False  # answered on system credentials on a byok route that accepts it
+    fell_back: bool = False  # answered on system credentials on a byok route
 
 
 def read_token(env_file: Path | None = None) -> str:
@@ -213,13 +219,14 @@ def _count(value) -> int:
 
 
 def _tile_tokens(base: int, per_tile: int, width: int, height: int) -> int:
+    # OpenAI does not publish how it rounds a resized side, so each is rounded up: an upper bound.
     scale = min(1.0, 2048 / max(width, height))  # fit a 2048 px square, never enlarging
-    width, height = int(width * scale), int(height * scale)
+    width, height = math.ceil(width * scale), math.ceil(height * scale)
     if min(width, height) > 768:  # then the short side down to 768 px
         if width <= height:
-            width, height = 768, int(height * 768 / width)
+            width, height = 768, math.ceil(height * 768 / width)
         else:
-            width, height = int(width * 768 / height), 768
+            width, height = math.ceil(width * 768 / height), 768
     return base + per_tile * math.ceil(width / 512) * math.ceil(height / 512)
 
 
@@ -277,7 +284,9 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], b
 
     Every attempt, failed or not, must be on the pinned provider. A failed attempt on the other
     credential is recorded, not refused: with the system credential the gateway tries Alex's key
-    first, and that fails for every model his key cannot reach."""
+    first, and that fails for every model his key cannot reach. "Fell back" is what happened: a
+    byok route answered on system credentials. It passes only on a route that accepts it, and
+    only after a failed byok attempt on the requested model."""
     gateway = _dict(_dict(_message(response).get("provider_metadata")).get("gateway"))
     model_attempts = _dict(gateway.get("routing")).get("modelAttempts")
     model_attempts = [_dict(a) for a in model_attempts] if isinstance(model_attempts, list) else []
@@ -309,11 +318,20 @@ def _observed(route: Route, response: dict) -> tuple[str, str, str, list[str], b
         problems.append(f"model {observed_model} answered, expected {route.model}")
     if name != PROVIDER:
         problems.append(f"provider {name or 'unknown'} answered, expected {PROVIDER}")
-    fell_back = route.accept_fallback and credential == "system"
-    if credential != route.credential and not fell_back:
+    fell_back = route.credential == "byok" and credential == "system"
+    byok_failed = any(
+        slug == route.model
+        and p.get("provider") == PROVIDER
+        and p.get("credentialType") == "byok"
+        and p.get("success") is not True
+        for slug, p in attempts
+    )
+    if credential != route.credential and not (fell_back and route.accept_fallback):
         problems.append(
             f"credential {credential or 'unknown'} was used, expected {route.credential}"
         )
+    elif fell_back and not byok_failed:
+        problems.append("credential system was used with no failed byok attempt before it")
     return observed_model, name, credential, failed, fell_back, problems
 
 
@@ -406,8 +424,9 @@ def call(
     except BudgetExceeded as error:
         overrun = error
     if problems:
-        raise RouteViolation("; ".join(problems))
+        raise RouteViolation("; ".join(problems), fell_back)
     if overrun is not None:
+        overrun.fell_back = fell_back
         raise overrun
     content = _message(response).get("content")
     return CallResult(

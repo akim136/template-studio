@@ -96,15 +96,17 @@ def _glyph_boxes(textpage, limit: int) -> list[tuple[float, float, float, float]
 
 def _paths(page, limit: int) -> tuple[list, list, bool]:
     """Horizontal rules and checkbox-sized squares among top-level drawn paths; at most
-    limit + 1 of them together. The flag is set if PATH_SCAN_LIMIT objects were read and more
+    limit + 1 of them together. Objects of every kind count toward PATH_SCAN_LIMIT, since
+    pypdfium2 walks them all even to filter; the flag is set if the limit was read and more
     remain unread."""
     rules, boxes = [], []
-    objects = page.get_objects(filter=[pdfium_raw.FPDF_PAGEOBJ_PATH], max_depth=1)
-    for read, obj in enumerate(objects):
+    for read, obj in enumerate(page.get_objects(max_depth=1)):
         if len(rules) + len(boxes) > limit:
             break
         if read == PATH_SCAN_LIMIT:
             return rules, boxes, True
+        if obj.type != pdfium_raw.FPDF_PAGEOBJ_PATH:
+            continue
         left, bottom, right, top = obj.get_bounds()
         width, height = right - left, top - bottom
         if width >= RULE_MIN_WIDTH and height <= RULE_MAX_HEIGHT:

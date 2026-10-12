@@ -7,11 +7,12 @@ takes this record as its input, so its own stage fields report NOT_RUN.
 
 The service takes bytes and returns a record. It opens no files from Python and makes no network
 calls. A source past any limit (bytes, pages, extracted text or time; Alex, October 12, 2026)
-fails with a FAILED record that names the limit. The page limit is checked on the page tree before
-any page is read, and on PDFium's count before any page is rendered. Time is checked between
-pages: one page's extraction or render cannot be interrupted, so a run can overshoot the limit by
-that page. PDFium is native code and may read system font files to draw fonts a PDF does not embed;
-fonts carry no answers, so this does not weaken generator isolation.
+fails with a FAILED record that names the limit. The page tree is expanded only up to four entries
+per allowed page, and the page limit is checked on it before any page is read, and on PDFium's
+count before any page is rendered. Time is checked between pages and once more at the end: one
+page's extraction or render cannot be interrupted, so a run can overshoot the limit by that page
+before it fails. PDFium is native code and may read system font files to draw fonts a PDF does not
+embed; fonts carry no answers, so this does not weaken generator isolation.
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ import time
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, replace
 
-from pypdf import PdfReader
-from pypdf.errors import DependencyError, FileNotDecryptedError, PyPdfError
+from pypdf import PdfReader, apply_configuration
+from pypdf.errors import DependencyError, FileNotDecryptedError, LimitReachedError, PyPdfError
 
 from studio.services.render import RENDERER, PageImage, inventory_images
 
@@ -151,11 +152,18 @@ def _page_tree(reader: PdfReader) -> list:
     """Every leaf of the page tree.
 
     For an encrypted file pypdf sizes ``reader.pages`` from /Count, so the inventory reads the
-    flattened tree, which pypdf builds on first page access, instead.
+    flattened tree, which pypdf builds on first page access, instead. /Pages nodes can be shared,
+    so a small file can expand to millions of pages: the walk stops after four entries per allowed
+    page (the pages and the /Pages nodes above them).
     """
-    if reader.flattened_pages is None:
-        with suppress(IndexError):  # an empty tree has no page 0
-            reader.get_page(0)
+    try:
+        with apply_configuration(page_tree_maximum_entries=4 * MAX_PAGES):
+            if reader.flattened_pages is None:
+                with suppress(IndexError):  # an empty tree has no page 0
+                    reader.get_page(0)
+    except LimitReachedError as error:
+        message = f"the page tree is too large to read ({error}); the page limit is {MAX_PAGES}"
+        raise LimitExceeded(message) from None
     if reader.flattened_pages is None:
         raise PyPdfError("the page tree could not be read")
     return list(reader.flattened_pages)
@@ -208,8 +216,10 @@ def _with_images(
     except LimitExceeded:
         raise
     except Exception as error:  # PDFium could not open the document at all
+        _check_time(deadline, "after the last page")
         reason = f"PDFium could not open the document: {type(error).__name__}: {error}"
         return [replace(page, image_reason=reason) for page in pages], None
+    _check_time(deadline, "after the last page")
     out = []
     for page in pages:
         if page.page > count:

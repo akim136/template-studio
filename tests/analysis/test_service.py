@@ -19,7 +19,7 @@ from studio.services.analysis import (
     analyze,
 )
 from studio.services.render import PageImage
-from tests.analysis.pdf_factory import DRAWN_BOX, encrypt, make_pdf
+from tests.analysis.pdf_factory import DRAWN_BOX, encrypt, make_pdf, shared_tree_pdf
 
 
 def test_inventory_records_every_page_from_the_source_bytes():
@@ -231,6 +231,16 @@ def test_a_source_over_the_page_limit_fails_before_any_page_is_read(monkeypatch)
     assert caught.value.to_dict()["status"] == "FAILED"
 
 
+def test_a_page_tree_is_expanded_only_to_a_bound_before_its_pages_are_counted(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("read or rendered a page of a source over the limit")
+
+    monkeypatch.setattr(analysis_module, "_page_record", must_not_run)
+    monkeypatch.setattr(analysis_module, "inventory_images", must_not_run)
+    with pytest.raises(AnalysisError, match=r"page tree .*1601 > 1600.*the page limit is 400"):
+        analyze(shared_tree_pdf(depth=20))  # 2**20 pages through 22 objects
+
+
 def test_a_source_at_the_page_limit_is_analyzed(monkeypatch):
     monkeypatch.setattr(analysis_module, "MAX_PAGES", 2)
     assert analyze(make_pdf(["a", "b"])).inventory == "COMPLETE"
@@ -270,6 +280,22 @@ def test_the_time_limit_also_covers_rendering(monkeypatch):
     monkeypatch.setattr(analysis_module, "_clock", clock(50))  # read ends at 150, render at 200
     with pytest.raises(AnalysisError, match="time limit of 180 seconds .*rendering page 1"):
         analyze(make_pdf(["a", "b", "c"]))
+
+
+def test_the_time_limit_is_checked_once_more_after_the_last_page(monkeypatch):
+    monkeypatch.setattr(analysis_module, "_clock", clock(70))  # read 70, render 140, end 210
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds after the last page"):
+        analyze(make_pdf(["a"]))
+
+
+def test_the_time_limit_holds_when_pdfium_cannot_open_the_document(monkeypatch):
+    def unopenable(*args, **kwargs):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(analysis_module, "inventory_images", unopenable)
+    monkeypatch.setattr(analysis_module, "_clock", clock(100))  # read 100, end 200
+    with pytest.raises(AnalysisError, match="time limit of 180 seconds after the last page"):
+        analyze(make_pdf(["a"]))
 
 
 def test_pages_pdfium_did_not_find_are_flagged(monkeypatch):

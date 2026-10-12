@@ -206,6 +206,13 @@ def test_a_page_with_more_characters_than_the_scan_reads_skips_only_the_characte
     assert "character scans skipped" in page.reason and "limit is 10" in page.reason
 
 
+def test_the_drawn_path_scan_counts_objects_of_every_kind(monkeypatch):
+    monkeypatch.setattr(candidates_module, "PATH_SCAN_LIMIT", 2)
+    runs = b" ".join(b"BT /F1 12 Tf 72 %d Td (x) Tj ET" % y for y in (720, 700, 680))
+    (page,) = extract_candidates(make_pdf([runs]))  # three text objects and no path
+    assert "drawn-path scan stopped after reading 2 objects" in page.reason
+
+
 def test_the_drawn_path_scan_reads_at_most_its_limit_of_objects(monkeypatch):
     monkeypatch.setattr(candidates_module, "PATH_SCAN_LIMIT", 1)
     (page,) = extract_candidates(make_pdf([FORM]))

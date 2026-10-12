@@ -434,6 +434,31 @@ def test_an_accepted_fallback_continues_and_is_recorded_on_every_call(tmp_path):
     assert record["observed_routes"] == [["openai/gpt-4.1", "openai", "system"]]
 
 
+FALLBACK_ROUTE = dataclasses.replace(
+    SERIAL, route=gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True)
+)
+
+
+class OverrunOnPages(FakeGateway):
+    """Falls back on every call; a page call then costs more than its reservation."""
+
+    def __call__(self, url, body, headers):
+        payload = json.loads(body) if body else None
+        page = payload is not None and isinstance(payload["messages"][-1]["content"], list)
+        self.kw["market"] = 0.9 if page else 0.002
+        return super().__call__(url, body, headers)
+
+
+def test_a_call_that_fell_back_and_then_failed_is_still_counted(tmp_path):
+    preflight = run(tmp_path, FakeGateway(attempts=FALLBACK, market=0.9), config=FALLBACK_ROUTE)
+    assert preflight["status"] == "BUDGET_STOPPED"
+    assert preflight["preflight"]["fell_back"] is True and preflight["fallback_calls"] == 1
+    (tmp_path / "page").mkdir()
+    page = run(tmp_path / "page", OverrunOnPages(attempts=FALLBACK), config=FALLBACK_ROUTE)
+    assert page["status"] == "BUDGET_STOPPED" and page["preflight"]["status"] == "PASSED"
+    assert page["preflight"]["fell_back"] is True and page["fallback_calls"] == 2
+
+
 def test_a_run_on_the_requested_key_records_no_fallback(tmp_path):
     record = run(tmp_path, FakeGateway())
     assert record["route"]["accept_fallback"] is False and record["fallback_calls"] == 0

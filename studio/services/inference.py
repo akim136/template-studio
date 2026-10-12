@@ -186,6 +186,7 @@ class Runner:
         self.token, self.ledger, self.transport, self.run_id = token, ledger, transport, run_id
         self.stop = _Stop()
         self.observed: set[tuple[str, str, str]] = set()
+        self.fallback_calls = 0  # every call that fell back, including those that then failed
         self.lock = threading.Lock()
 
     def _guard(self, call):
@@ -196,9 +197,11 @@ class Runner:
         try:
             return "RECEIVED", call()
         except gateway.RouteViolation as error:
+            self._count_fallback(error.fell_back)
             self.stop.set(f"route violation: {error}")
             return f"ROUTE_VIOLATION: {error}", None
         except BudgetExceeded as error:
+            self._count_fallback(error.fell_back)
             self.stop.set(f"budget: {error}")
             return f"BUDGET_STOPPED: {error}", None
         except gateway.GatewayError as error:
@@ -214,6 +217,12 @@ class Runner:
             self.observed.add(
                 (result.observed_model, result.observed_provider, result.observed_credential)
             )
+        self._count_fallback(result.fell_back)
+
+    def _count_fallback(self, fell_back: bool) -> None:
+        if fell_back:
+            with self.lock:
+                self.fallback_calls += 1
 
     def preflight(self) -> dict:
         """One call with no page content, so a wrong route is found before any page is sent."""
@@ -235,8 +244,8 @@ class Runner:
             )
 
         status, result = self._guard(call)
-        if result is None:
-            return {"status": status, "fell_back": False}
+        if result is None:  # the preflight is the first call, so any fallback so far is its own
+            return {"status": status, "fell_back": self.fallback_calls > 0}
         self._observe(result)
         return {
             "status": "PASSED",
@@ -478,7 +487,6 @@ def run(
         "business_rules_sha256": rules_sha,
     }
     all_total, run_total = ledger.totals()
-    calls = [call for e in evidence for call in e.calls]
     route = config.route
     return {
         "profile": PROFILE,
@@ -490,7 +498,7 @@ def run(
             "accept_fallback": route.accept_fallback,
         },
         "observed_routes": sorted(list(observed) for observed in runner.observed),
-        "fallback_calls": sum(1 for call in calls if call["fell_back"]) + preflight["fell_back"],
+        "fallback_calls": runner.fallback_calls,
         "preflight": preflight,
         "source_sha256": analysis.source_sha256,
         "analysis_inventory": analysis.inventory,

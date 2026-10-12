@@ -36,7 +36,26 @@ def make_pdf(texts: list[str | bytes], *, size=(612, 792), bad_startxref: bool =
             b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % (*size, page + 1)
         )
         objects[page + 1] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
+    return from_objects(objects, bad_startxref=bad_startxref)
 
+
+def shared_tree_pdf(depth: int) -> bytes:
+    """A page tree whose every /Pages node lists the same child twice: 2**depth pages reached
+    through depth + 1 objects."""
+    objects = {1: b"<< /Type /Catalog /Pages 2 0 R >>"}
+    for level in range(depth):
+        node, child = 2 + level, 3 + level
+        count = 2 ** (depth - level)
+        objects[node] = b"<< /Type /Pages /Kids [%d 0 R %d 0 R] /Count %d >>" % (
+            child,
+            child,
+            count,
+        )
+    objects[2 + depth] = b"<< /Type /Page /MediaBox [0 0 612 792] >>"
+    return from_objects(objects)
+
+
+def from_objects(objects: dict[int, bytes], *, bad_startxref: bool = False) -> bytes:
     out = bytearray(b"%PDF-1.4\n")
     offsets = {}
     for number in sorted(objects):

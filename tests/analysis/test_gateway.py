@@ -63,6 +63,7 @@ def test_a_silent_fallback_to_system_credentials_is_a_route_violation_after_sett
         call(book, FakeGateway(attempts=attempts, cost=0.001, market=0.001))
     settle = [row for row in rows(book) if row["kind"] == "settle"][0]
     assert settle["credential"] == "system" and settle["usd"] == "0.001"
+    assert settle["fell_back"] is True  # what happened, whether or not it was accepted
 
 
 @pytest.mark.parametrize(
@@ -321,18 +322,39 @@ def test_a_call_on_the_requested_key_did_not_fall_back(tmp_path):
     assert not result.fell_back and result.observed_credential == "byok"
 
 
+BYOK_FAILED = {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 403}
+
+
 @pytest.mark.parametrize(
     ("kwargs", "problem"),
     [
         ({"model": "openai/gpt-5"}, "model openai/gpt-5 answered"),
         ({"model_attempts": 2}, "2 model attempts"),
+        (
+            {
+                "attempts": [
+                    BYOK_FAILED,
+                    {"provider": "azure", "credentialType": "system", "success": True},
+                ]
+            },
+            "provider azure",
+        ),
+        (
+            {"attempts": [BYOK_FAILED, {"provider": "openai", "success": True}]},
+            "credential unknown",
+        ),
+        (
+            {"attempts": [{"provider": "openai", "credentialType": "system", "success": True}]},
+            "credential system was used with no failed byok attempt",
+        ),
     ],
 )
 def test_an_accepted_fallback_excuses_nothing_but_the_credential(tmp_path, kwargs, problem):
     attempts = [
-        {"provider": "openai", "credentialType": "byok", "success": False, "statusCode": 403},
+        BYOK_FAILED,
         {"provider": "openai", "credentialType": "system", "success": True, "statusCode": 200},
     ]
+    kwargs = {"attempts": attempts, **kwargs}
     with pytest.raises(gateway.RouteViolation, match=problem):
         gateway.call(
             gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True),
@@ -343,7 +365,7 @@ def test_an_accepted_fallback_excuses_nothing_but_the_credential(tmp_path, kwarg
             label="test",
             worst_case=0.05,
             max_output_tokens=100,
-            transport=FakeGateway(attempts=attempts, **kwargs),
+            transport=FakeGateway(**kwargs),
         )
 
 
@@ -367,6 +389,7 @@ def test_o4_mini_is_offered_as_a_reasoning_model():
         ("openai/gpt-5", (768, 994), 70 + 140 * 4),
         ("openai/gpt-4.1", (2000, 3000), 85 + 170 * 6),  # to 1365 x 2048, then 768 x 1152
         ("openai/gpt-4.1", (300, 200), 85 + 170),  # never enlarged
+        ("openai/gpt-4.1", (769, 1026), 85 + 170 * 6),  # 768 x 1024.67 counts as 1025 rows
         ("openai/gpt-5.2", (768, 994), 922),  # 24 x 32 patches x 1.2, rounded up
         ("openai/gpt-5-nano", (768, 994), 1152),  # x 1.5
         ("openai/o4-mini", (768, 994), 1321),  # x 1.72
