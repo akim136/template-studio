@@ -1,8 +1,10 @@
-// Shared page behaviour: the account menu, signing out, the library's filters, and the toast.
+// Shared page behaviour: the account menu, signing out, the library's filters, the toast, and
+// drafting that goes on in the background.
 "use strict";
 
 window.studio = (() => {
   let toastTimer = null;
+  let refreshLibrary = null; // set on the library: shows the current view again in place
 
   function toast(message) {
     const box = document.querySelector("[data-toast]");
@@ -146,13 +148,108 @@ window.studio = (() => {
       show(url.href, true);
     });
     window.addEventListener("popstate", () => show(window.location.href, false));
+    refreshLibrary = () => show(window.location.href, false);
+  }
+
+  // ---- drafting that goes on while the studio is open ----
+  // The drafts this browser drives are kept here, so any studio page can carry one on after its
+  // drafting page is left. A lock per draft keeps one tab driving it; the server's claims keep
+  // every model call single regardless. The step that finishes a draft saves its fields.
+
+  const DRAFTING_KEY = "studio.drafting";
+  const WORKERS = 4;
+  const IDLE_MS = 3000;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  function tracked() {
+    try {
+      const list = JSON.parse(window.localStorage.getItem(DRAFTING_KEY));
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function keep(list) {
+    try { window.localStorage.setItem(DRAFTING_KEY, JSON.stringify(list)); } catch { /* not kept */ }
+  }
+
+  const drafting = {
+    track(entry) { keep([...tracked().filter((e) => e.draft !== entry.draft), entry]); },
+    untrack(draftId) { keep(tracked().filter((e) => e.draft !== draftId)); },
+    isTracked(draftId) { return tracked().some((e) => e.draft === draftId); },
+    // Runs `work(held)` holding this draft's lock if no other tab holds it.
+    hold(draftId, work) {
+      if (!navigator.locks) return work(true);
+      return navigator.locks.request(`studio-draft-${draftId}`, { ifAvailable: true }, (lock) => work(Boolean(lock)));
+    },
+  };
+
+  const RANK = { pending: 0, drafting: 1, drafted: 2, checking: 3, done: 4, lost: 4 };
+  const progress = (v) => v.pages.reduce((sum, p) => sum + RANK[p.state], v.preflight === "PASSED" ? 1 : 0);
+
+  function finished(entry, view) {
+    if (view.state === "APPLIED") {
+      toast(`${entry.title}: drafting finished. ${plural(view.applied.fields, "field")} saved; it needs review.`);
+    } else if (view.state === "DRAFTED") {
+      toast(`${entry.title}: drafting finished, but nothing was saved: ${view.not_applied || "open it to see why"}.`);
+    } else {
+      toast(`${entry.title}: drafting stopped. Open it to see why.`);
+    }
+    if (refreshLibrary) refreshLibrary();
+  }
+
+  async function carryOn(entry) {
+    const path = `/api/templates/${entry.template}/drafts/${entry.draft}/step`;
+    let view = null;
+    let paused = false;
+    const send = async () => {
+      const answer = await api("POST", path);
+      if (!answer.ok) {
+        paused = true;
+        if ([404, 409, 422].includes(answer.status)) drafting.untrack(entry.draft); // it cannot go on
+        return;
+      }
+      const next = answer.data;
+      if (!view || (view.state === "RUNNING" && (next.state !== "RUNNING" || progress(next) >= progress(view)))) view = next;
+    };
+    await send();
+    while (!paused && view.state === "RUNNING") {
+      if (!entry.announced) {
+        entry.announced = true; // once per draft, not on every page
+        if (drafting.isTracked(entry.draft)) drafting.track(entry);
+        toast(`${entry.title}: drafting goes on in the background.`);
+      }
+      const open = view.pages.filter((p) => p.state === "pending" || p.state === "drafted").length;
+      const before = progress(view);
+      const calls = view.preflight === "PASSED" ? Math.max(1, Math.min(WORKERS, open)) : 1;
+      await Promise.all(Array.from({ length: calls }, send));
+      if (view.state === "RUNNING" && progress(view) === before) await sleep(IDLE_MS); // calls still out elsewhere
+    }
+    if (paused) return; // picked up again on the next page
+    drafting.untrack(entry.draft);
+    finished(entry, view);
+  }
+
+  // Every draft this browser drives goes on here, except the one this drafting page drives itself.
+  function setUpDrafting() {
+    const page = document.querySelector("[data-analyzing]");
+    const here = page ? page.dataset.template : null;
+    for (const entry of tracked()) {
+      if (entry.template === here) continue;
+      drafting.hold(entry.draft, async (held) => {
+        if (held) await carryOn(entry);
+      });
+    }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     setUpMenu();
     setUpFilters();
     setUpLibrary();
+    setUpDrafting();
   });
 
-  return { api, reason, toast };
+  return { api, reason, toast, drafting };
 })();

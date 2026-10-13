@@ -196,6 +196,7 @@
     const moved = !view || next.id !== view.id || next.state !== view.state || progress(next) !== progress(view);
     view = next;
     if (view.state === "RUNNING") watched = true;
+    else studio.drafting.untrack(view.id); // nothing left to carry on
     // Steps still out when a draft stops finish afterwards, so the result is read again as they do.
     if (view.state !== "RUNNING" && (moved || !result)) await readResult();
     const nothingFound = view.state === "DRAFTED" && result && !result.fields.length;
@@ -253,13 +254,23 @@
     }
   }
 
+  // Another tab may already be driving this draft; then this page only follows it.
+  async function follow() {
+    while (driving && view.state === "RUNNING" && (await refresh()));
+  }
+
   async function drive() {
     if (driving || !view || view.state !== "RUNNING") return;
     driving = true;
     hideError();
     render();
-    await routeCheck();
-    await Promise.all(Array.from({ length: WORKERS }, worker));
+    // Kept so that, if this page is left, any studio page in this browser carries the draft on.
+    studio.drafting.track({ template: id, draft: view.id, title: root.dataset.title });
+    await studio.drafting.hold(view.id, async (held) => {
+      if (!held) return follow();
+      await routeCheck();
+      await Promise.all(Array.from({ length: WORKERS }, worker));
+    });
     driving = false;
     render();
   }
@@ -306,8 +317,10 @@
     result = null;
     start();
   });
+  // Calls still out when the page is left finish on the server, and any studio page carries the
+  // draft on, so only a start or a save in flight asks first.
   window.addEventListener("beforeunload", (event) => {
-    if (!leaving && (inFlight > 0 || busy !== "")) event.preventDefault();
+    if (!leaving && busy !== "") event.preventDefault();
   });
 
   (async () => {
@@ -323,7 +336,8 @@
     if (autostart) window.history.replaceState(null, "", window.location.pathname);
     if (answer.data.draft) {
       await show(answer.data.draft);
-      if (autostart && view.base_revision === revision) await drive();
+      const ours = autostart || studio.drafting.isTracked(view.id); // this browser was driving it
+      if (ours && view.base_revision === revision) await drive();
     } else if (autostart) {
       await start();
     } else {
