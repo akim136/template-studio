@@ -69,7 +69,8 @@
         "static/",
         "tests/ui/",
         "tests/test_health.py",
-        "docs/design-import.md"
+        "docs/design-import.md",
+        "tests/test_repo_contract.py"
       ]
     }
   }
