@@ -98,3 +98,5 @@ denylist of protected values stays outside Git.
   and why.
 - `tests/state` and `tests/ui`: the exact `/api` behaviour, such as saves and conflicts, review and
   approval, create, status checks and orphans.
+- [`solution-brief/`](solution-brief/README.md): the static solution brief for Vercel's
+  assessment. Its own Vercel project serves it, and it does not change the app.

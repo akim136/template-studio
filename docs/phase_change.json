@@ -1,6 +1,8 @@
 {
   "phase": "P3",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Adds the feature F-P3-solution-brief, which covers the static solution brief under solution-brief/, its check tool, a .gitignore line, a README pointer and its test."
+  "kind": "feature",
+  "features": [
+    "F-P3-solution-brief"
+  ],
+  "summary": "Adds the static solution brief for Vercel's assessment under solution-brief/, its check tool, a README pointer and a test. The PDF and check outputs stay out of Git. No app changes."
 }
