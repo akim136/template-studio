@@ -72,6 +72,15 @@
         "docs/design-import.md",
         "tests/test_repo_contract.py"
       ]
+    },
+    "F-P3-solution-brief": {
+      "summary": "The public solution brief for Vercel's assessment: a static page under solution-brief/, served by its own Vercel project. The PDF and check outputs stay out of Git. It does not change the app.",
+      "paths": [
+        "solution-brief/",
+        ".gitignore",
+        "README.md",
+        "tests/test_solution_brief.py"
+      ]
     }
   }
 }
