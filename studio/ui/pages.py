@@ -16,6 +16,7 @@ session, like the rest of static/.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from math import ceil
 from pathlib import Path
@@ -58,6 +59,20 @@ environment = jinja2.Environment(
 )
 templates = Jinja2Templates(env=environment)
 pages = APIRouter()
+
+
+def _asset_version() -> str:
+    """A digest of the static files, so a deploy's pages never run an earlier deploy's scripts or
+    styles from a browser's cache."""
+    digest = hashlib.sha256()
+    for path in sorted((ROOT / "static").rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(ROOT).as_posix().encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+ASSET_VERSION = _asset_version()
+environment.globals["asset"] = lambda name: f"/static/{name}?v={ASSET_VERSION}"
 
 
 @pages.get("/favicon.ico", include_in_schema=False)
@@ -103,12 +118,13 @@ def _viewer(request: Request) -> tuple[Services | None, dict | None, Response | 
     if services.auth is None:
         if not _loopback(request.scope):
             return None, None, _message(request, None, 403, "Not available", NOT_LOOPBACK)
-        return services, {"local": True}, None
+        return services, {"local": True, "key": "local"}, None
     cookie = cookie_parser(request.headers.get("cookie", "")).get(identity.SESSION_COOKIE)
     actor = identity.session_actor(services.auth, cookie, services.clock())
     if actor is None:
         return None, None, RedirectResponse("/auth/login", 303)
-    return services, {"local": False, "name": actor.name, "email": actor.email}, None
+    key = hashlib.sha256(actor.email.encode()).hexdigest()[:16]  # names the person, not the email
+    return services, {"local": False, "name": actor.name, "email": actor.email, "key": key}, None
 
 
 def _render(

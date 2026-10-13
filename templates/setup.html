@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}New template{% endblock %}
-{% block head %}<script src="/static/setup.js" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('setup.js') }}" defer></script>{% endblock %}
 {% block body %}
 <main class="page page-setup" data-setup data-upload="{{ upload }}" data-drafting="{{ 'local' if viewer.local else 'hosted' }}" data-max-bytes="{{ max_bytes }}">
   <nav class="breadcrumb" aria-label="Breadcrumb">

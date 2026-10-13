@@ -7,11 +7,11 @@
   <link rel="icon" href="/favicon.ico" sizes="48x48">
   <link rel="icon" href="/static/favicon.png" type="image/png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/studio.css">
-  <script src="/static/studio.js" defer></script>
+  <link rel="stylesheet" href="{{ asset('studio.css') }}">
+  <script src="{{ asset('studio.js') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if viewer %} data-viewer="{{ viewer.key }}"{% endif %}>
   <header class="app-header">
     <a class="brand" href="/" aria-label="Template Studio: all templates">
       <img class="brand-mark" src="/static/homebase-mark.png" width="51" height="24" alt="">

@@ -10,7 +10,7 @@
   const id = root.dataset.template;
   let revision = Number(root.dataset.revision); // the template's current revision
   const base = `/api/templates/${id}/drafts`;
-  const WORKERS = 4;
+  const WORKERS = studio.drafting.workers;
   const POLL_MS = 5000;
 
   let view = null; // the draft as the server last showed it
@@ -193,8 +193,7 @@
     else showError("The result could not be read", answer.reason);
   }
 
-  const RANK = { pending: 0, drafting: 1, drafted: 2, checking: 3, done: 4, lost: 4 };
-  const progress = (v) => v.pages.reduce((sum, p) => sum + RANK[p.state], v.preflight === "PASSED" ? 1 : 0);
+  const progress = (v) => studio.drafting.progress(v);
 
   // Answers to concurrent requests can arrive out of order; an older running view never replaces
   // a newer one.
@@ -203,6 +202,7 @@
     const moved = !view || next.id !== view.id || next.state !== view.state || progress(next) !== progress(view);
     view = next;
     if (view.state === "RUNNING") watched = true;
+    else studio.drafting.untrack(view.id); // nothing left to carry on
     // Steps still out when a draft stops finish afterwards, so the result is read again as they do.
     if (view.state !== "RUNNING" && (moved || !result)) await readResult();
     const nothingFound = view.state === "DRAFTED" && result && !result.fields.length;
@@ -265,8 +265,19 @@
     driving = true;
     hideError();
     render();
-    await routeCheck();
-    await Promise.all(Array.from({ length: WORKERS }, worker));
+    // Kept so that, if this page is left, any studio page in this browser carries the draft on.
+    studio.drafting.track({ template: id, draft: view.id, title: root.dataset.title });
+    // Another tab may already be driving this draft; then this page follows it, and takes over if
+    // that tab closes before the draft ends.
+    while (driving && view.state === "RUNNING") {
+      const held = await studio.drafting.hold(view.id, async (held) => {
+        if (!held) return false;
+        await routeCheck();
+        await Promise.all(Array.from({ length: WORKERS }, worker));
+        return true;
+      });
+      if (held || !(await refresh())) break;
+    }
     driving = false;
     render();
   }
@@ -313,8 +324,10 @@
     result = null;
     start();
   });
+  // Calls still out when the page is left finish on the server, and any studio page carries the
+  // draft on, so only a start or a save in flight asks first.
   window.addEventListener("beforeunload", (event) => {
-    if (!leaving && (inFlight > 0 || busy !== "")) event.preventDefault();
+    if (!leaving && busy !== "") event.preventDefault();
   });
 
   (async () => {
@@ -330,7 +343,8 @@
     if (autostart) window.history.replaceState(null, "", window.location.pathname);
     if (answer.data.draft) {
       await show(answer.data.draft);
-      if (autostart && view.base_revision === revision) await drive();
+      const ours = autostart || studio.drafting.isTracked(view.id); // this browser was driving it
+      if (ours && view.base_revision === revision) await drive();
     } else if (autostart) {
       await start();
     } else {
