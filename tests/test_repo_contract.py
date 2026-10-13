@@ -42,6 +42,9 @@ def test_docs_state_truthful_status() -> None:
     for text in (guide, readme):
         assert "/healthz" in text
         assert "DRAFTING_HOSTED" in text
+        # the old label may be named as history, but never as what /healthz reports now
+        for sentence in re.split(r"(?<=[.;])\s", text):
+            assert not ("NOT_IMPLEMENTED" in sentence and "still reports" in sentence), sentence
     assert "NOT_APPLIED" in guide
     assert "BOOTSTRAP_REQUIRED" in guide
     assert "generic rules" in guide and "generic rules" in readme
