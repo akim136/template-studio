@@ -35,14 +35,15 @@ These checks cover only this brief. They do not run the studio, sign in, call a 
 ## Vercel project
 
 `akbuilds-brief`: Root Directory `solution-brief`, Output Directory `public`, framework Other, no
-build or install command, and no Vercel Authentication. The studio keeps its protection.
+build or install command, and no Vercel Authentication. The studio keeps its protection. It
+deploys from `main` through Git, and skips the build when `solution-brief/` is unchanged.
 
 ## Before publishing on `akbuilds.dev`
 
-1. `studio.akbuilds.dev` serves the studio, and sign-in and upload work there. That needs the
-   domain on the studio's project, `STUDIO_PUBLIC_ORIGIN`, a production redeploy, and the new
-   origin in the R2 CORS rules.
+1. `studio.akbuilds.dev` serves the studio, and sign-in and upload work there. The domain on the
+   studio's project, `STUDIO_PUBLIC_ORIGIN`, the sign-in callback, a production redeploy and the
+   R2 CORS origin were done on October 13, 2026.
 2. Then move `akbuilds.dev` and `www.akbuilds.dev` to `akbuilds-brief`, with `www` redirecting to
    the apex.
-3. If PR #20 or any other app change merges first, update the source commit and PR status on the
-   page and in `SOLUTION_BRIEF.md`, then rerun the check.
+3. If another app change merges, update the source commit, PR range and test count on the page
+   and in `SOLUTION_BRIEF.md`, then rerun the check.

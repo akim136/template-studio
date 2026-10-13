@@ -46,7 +46,7 @@ Vercel Authentication protects preview and production deployments. Sign in with 
 4. Confirm **I reviewed every field on revision N** and approve. Make another change to demonstrate automatic approval invalidation.
 5. Reapprove and simulate template creation. Watch the create and verify steps. No HelloSign/Dropbox Sign API request is sent.
 
-Application source: `main` at `a15cac6`, with PRs #13–#19 merged and PR #20 (`feat/completion-steps`) still open as of **October 12, 2026**. Signed-in production checks covered sign-in, a 400-page upload, review and approval. Hosted drafting was checked on a preview with a synthetic PDF; a drafting run on production is still to do.
+Application source: `main` at `d64f620`, with PRs #13–#24 merged as of **October 13, 2026**. Signed-in production checks covered sign-in, a 400-page upload, review and approval. Hosted drafting was checked on a preview with a synthetic PDF; a drafting run on production is still to do.
 
 ## 5. Rollout
 
@@ -71,10 +71,10 @@ Application source: `main` at `a15cac6`, with PRs #13–#19 merged and PR #20 (`
 **Claude Design:** Template Studio Clean v2.3 prototype, visual language and interaction handoff.  
 **Claude Code:** Application implementation, debugging, integration and tests.
 
-**Executed checks:** On `main` at `a15cac6`, 673 pytest tests and Ruff pass, and GitHub CI is green. A local browser harness with synthetic PDFs and fake R2/Gateway exercised tab takeover, sign-out cleanup, malformed state, retry eligibility, the signing-provider redirect and completion-step timing. These are not signed-in production end-to-end results.
+**Executed checks:** On `main` at `d64f620`, 676 pytest tests and Ruff pass, and GitHub CI is green. A local browser harness with synthetic PDFs and fake R2/Gateway exercised tab takeover, sign-out cleanup, malformed state, retry eligibility, the signing-provider redirect and completion-step timing. These are not signed-in production end-to-end results.
 
 **AI evaluation:** The same `studio.services.analysis` powers the app and `eval/`. Stage A proposes fields using PDF image/text/candidate evidence; Stage B checks the drawn overlay against the page. Keep initial suggestions, AI self-checks and human corrections distinct, with gold references outside the model's generation environment.
 
-**Still to do:** Decide PR #20, run hosted drafting on production, grant named reviewer access, complete the `studio.akbuilds.dev` callback and R2 origin, and record the final submission commit. Re-run the customer-flow validation after those changes.
+**Still to do:** Run hosted drafting on production, grant named reviewer access and record the final submission commit. The studio now runs on `studio.akbuilds.dev`, with its sign-in callback and R2 origin. Re-run the customer-flow validation after those changes.
 
-*Implementation snapshot of October 12, 2026, checked against `main` at `a15cac6` and its project guide. Signed-in production checks were run by Alex; the coding session ran the tests.*
+*Implementation snapshot of October 13, 2026, checked against `main` at `d64f620` and its project guide. Signed-in production checks were run by Alex; the coding session ran the tests.*

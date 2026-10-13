@@ -197,7 +197,7 @@
 <div class="link-card"><strong>Solution brief</strong><a href="https://akbuilds.dev/" rel="noopener noreferrer" target="_blank">akbuilds.dev</a></div>
 <div class="link-card"><strong>Repository · Private</strong><a href="https://github.com/akim136/template-studio" rel="noopener noreferrer" target="_blank">github.com/akim136/template-studio</a></div>
 </div>
-<p class="fineprint" id="release-note"><strong>Application source:</strong> <a href="https://github.com/akim136/template-studio/commit/a15cac6" rel="noopener noreferrer" target="_blank"><code>main a15cac6</code></a> with PRs #13–#19 merged; <a href="https://github.com/akim136/template-studio/pull/20" rel="noopener noreferrer" target="_blank">PR #20</a> remains open. Signed-in production checks covered upload, review and approval; named reviewer invitations are not yet sent.</p>
+<p class="fineprint" id="release-note"><strong>Application source:</strong> <a href="https://github.com/akim136/template-studio/commit/d64f620" rel="noopener noreferrer" target="_blank"><code>main d64f620</code></a> with PRs #13–#24 merged. Signed-in production checks covered upload, review and approval; named reviewer invitations are not yet sent.</p>
 <ol class="demo-path">
 <li><span class="stepno">01</span><strong>Set up</strong><p>Enter sponsor/title, choose signers and upload a synthetic PDF.</p></li>
 <li><span class="stepno">02</span><strong>Start drafting</strong><p>Click <em>Start drafting</em>. Watch each page drafted, then checked.</p></li>
@@ -262,13 +262,13 @@
 <div class="tool"><strong>Claude Code</strong><p>FastAPI/Jinja implementation, AI integration, debugging and regression tests.</p></div>
 </div>
 <div class="validation-grid">
-<div><h3>Executed automated checks</h3><p>673 pytest tests and Ruff checks pass on main a15cac6, and GitHub CI is green on main.</p></div>
+<div><h3>Executed automated checks</h3><p>676 pytest tests and Ruff checks pass on main d64f620, and GitHub CI is green on main.</p></div>
 <div><h3>Browser harness</h3><p>Synthetic PDFs with fake R2 and Gateway: resume and takeover, sign-out cleanup, malformed state and safe create retry.</p></div>
 <div><h3>Two-pass AI evaluation</h3><p>Same analysis service for app and eval: Stage A drafts; Stage B reviews image overlays; human-final corrections remain separate.</p></div>
 <div><h3>Model trials · provisional</h3><p>gpt-4.1 was PARTIAL on two development cases; gpt-5.4-mini drafted both COMPLETE. Against reviewed references, both are still blocked on critical findings.</p></div>
 </div>
 <div aria-label="Three evaluation stages" class="stages"><span>Initial page draft</span><span aria-hidden="true" class="arrow">→</span><span>Overlay self-check</span><span aria-hidden="true" class="arrow">→</span><span>Human-approved revision</span></div>
-<div class="status" id="validation-status"><strong>Readiness · implementation snapshot, October 12, 2026</strong><p>Done: PRs #13–#19 merged, tests passing, and signed-in production checks of upload, review and approval. Still to do: a hosted drafting run on production, reviewer invitations and the final submission commit. PR #20 (completion-step timing) is open.</p><p>No real signing integration. Model scores stay provisional until geometry tolerances are agreed; hosted drafting was checked on a preview with a synthetic PDF.</p></div>
+<div class="status" id="validation-status"><strong>Readiness · implementation snapshot, October 13, 2026</strong><p>Done: PRs #13–#24 merged, tests passing, signed-in production checks of upload, review and approval, and the studio moved to studio.akbuilds.dev. Still to do: a hosted drafting run on production, reviewer invitations and the final submission commit.</p><p>No real signing integration. Model scores stay provisional until geometry tolerances are agreed; hosted drafting was checked on a preview with a synthetic PDF.</p></div>
 <p class="refs"><strong>Product references:</strong> <a href="https://vercel.com/docs/functions" rel="noopener noreferrer" target="_blank">Functions</a> · <a href="https://vercel.com/docs/ai-gateway" rel="noopener noreferrer" target="_blank">AI Gateway</a> · <a href="https://vercel.com/docs/deployments/environments" rel="noopener noreferrer" target="_blank">Preview Deployments</a> · <a href="https://vercel.com/docs/sign-in-with-vercel" rel="noopener noreferrer" target="_blank">Sign in with Vercel</a>.</p>
 </section>
 </div><div class="page-foot"><span>HOMEBASE / TEMPLATE STUDIO</span><span>4 / 4</span></div></article></main>
