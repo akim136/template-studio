@@ -56,6 +56,7 @@ def test_the_editor_leads_back_to_the_record_and_has_the_completion_modal(local,
     assert back and back.groups() == (f"/templates/{template['id']}", "Back to the record")
     assert '<dialog class="completion" aria-labelledby="cp-title" data-completion>' in page.text
     assert 'aria-label="Create progress"' in page.text
+    assert "Approval binds this exact revision" not in page.text
 
 
 def test_typed_values_cannot_close_the_data_block(local, services):

@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "The completion dialog shows its steps one after another, as in the design, instead of flipping all three together when the simulated create answers."
+  "summary": "Interface cleanup: the drafting page's cost lines and model-call note, the drawer's approval note and the dialog's read-back text are removed, and selects match the search field."
 }
