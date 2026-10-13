@@ -386,8 +386,8 @@ class Operations:
         try:
             return self._change_orphans(operation["template_id"], keep)
         except StorageError as error:  # status checks now see the replacement, so name this one
-            detail = f"operation {operation['id']} was not kept: {REPLACED} ({error})"
-            raise Unkept(detail) from None
+            detail = f"operation {operation['id']} was not kept: {REPLACED}"
+            raise Unkept(f"{detail} ({error})", public=detail) from None
 
     def _reclaimed(self, operation: dict) -> None:
         """An orphan record left for an operation that now holds its slot says so."""
@@ -477,6 +477,5 @@ def _ids(operation: dict) -> list[str]:
 
 
 def _unrecorded(error: StorageError) -> StorageError:
-    return StorageError(
-        f"the create was sent, but its outcome was not recorded; check its status ({error})"
-    )
+    detail = "the create was sent, but its outcome was not recorded; check its status"
+    return StorageError(f"{detail} ({error})", public=detail)

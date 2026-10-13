@@ -184,6 +184,23 @@ def test_a_storage_failure_keeps_its_internals_in_the_server_log(
     assert "cannot write templates/x/head.json: R2 answered 500" in capsys.readouterr().err
 
 
+def test_a_storage_failure_the_operator_must_act_on_keeps_its_instruction(
+    client, template, services, monkeypatch, capsys
+):
+    def failing(template_id, revision, bound):
+        internal = "cannot write templates/x/orphans/index.json: R2 answered 500"
+        public = "operation op-1 was not kept: resolve by hand"
+        raise StorageError(f"{public} ({internal})", public=public)
+
+    monkeypatch.setattr(services.operations, "create", failing)
+    url = f"/api/templates/{template['id']}"
+    response = client.post(f"{url}/operation", json=bound(template))
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "op-1 was not kept: resolve by hand" in detail and "R2 answered" not in detail
+    assert "R2 answered 500" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "headers",
     [

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import stat
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,7 +30,18 @@ KEY = re.compile(r"[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*")
 
 
 class StorageError(Exception):
-    """The store could not be read or written. Nothing may be reported as saved."""
+    """The store could not be read or written. Nothing may be reported as saved. The message may
+    name keys and the provider's answer, so it is only logged; `public`, when set, is what the
+    operator must still be told, and names neither."""
+
+    def __init__(self, message: str, public: str | None = None):
+        super().__init__(message)
+        self.public = public
+
+
+def log_failure(error: StorageError) -> None:
+    """Storage internals (keys, provider answers) go to the server log, never to the browser."""
+    print(f"template-studio: storage failed: {error}", file=sys.stderr)
 
 
 class PreconditionFailed(Exception):

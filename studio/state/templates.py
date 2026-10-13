@@ -50,7 +50,14 @@ from datetime import datetime
 from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.policy import Policy, PolicyError, field_errors, issues, parse_policy
-from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical, digest
+from studio.state.store import (
+    ObjectStore,
+    PreconditionFailed,
+    StorageError,
+    canonical,
+    digest,
+    log_failure,
+)
 
 TEMPLATE_ID = re.compile(r"[0-9a-f]{32}")
 SAVE_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
@@ -152,7 +159,10 @@ class Templates:
                 "approval": head["approval"],
                 "operation": None if operation is None else json.loads(operation.data),
             }
-        except (StorageError, NotFound) as error:
+        except StorageError as error:
+            log_failure(error)  # its keys and provider answer stay in the server log
+            return {**row, "error": "storage failed"}
+        except NotFound as error:
             return {**row, "error": str(error) or "missing"}
         except (ValueError, KeyError, TypeError) as error:  # a malformed stored record
             return {**row, "error": f"a stored record is malformed ({type(error).__name__})"}
