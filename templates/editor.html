@@ -2,7 +2,7 @@
 {% set details = template.details %}
 {% set title = details.title or 'Untitled' %}
 {% block title %}Edit {{ title }}{% endblock %}
-{% block head %}<script src="/static/editor.js" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('editor.js') }}" defer></script>{% endblock %}
 {% block body %}
 <main class="editor" data-editor>
   <script type="application/json" data-editor-data>{{ data | tojson }}</script>

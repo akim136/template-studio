@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_healthz_reports_truthful_status(monkeypatch) -> None:
-    truthful = {"status": "ok", "analysis": "NOT_IMPLEMENTED", "state": "not_configured"}
+    truthful = {"status": "ok", "analysis": "DRAFTING_HOSTED", "state": "not_configured"}
     with TestClient(app) as client:  # runs startup and shutdown
         monkeypatch.setattr(app.state, "configuration", Configuration(None, "not_configured"))
         assert client.get("/healthz").json() == truthful
@@ -96,7 +96,7 @@ def test_app_starts_without_credentials_or_environment() -> None:
         "from app import app\n"
         "with TestClient(app) as c:\n"
         "    r = c.get('/healthz')\n"
-        "assert r.status_code == 200 and r.json()['analysis'] == 'NOT_IMPLEMENTED'\n"
+        "assert r.status_code == 200 and r.json()['analysis'] == 'DRAFTING_HOSTED'\n"
         "print('started')\n"
     )
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(ROOT)}

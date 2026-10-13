@@ -4,9 +4,8 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P3 core interface, slice 4c: library, setup, record, Analyzing and field editor pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`,
-which stops being accurate when this slice merges; changing it needs a scope update (guide
-section 10). The shared analysis service reads the text layer and geometry of every page, renders
+**Status: P3 core interface, slice 4c: library, setup, record, Analyzing and field editor pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` reports `"analysis": "DRAFTING_HOSTED"`:
+fields are drafted on the hosted studio only. The shared analysis service reads the text layer and geometry of every page, renders
 every page, and flags pages the user must look at. On the hosted studio, the Analyzing page drafts
 and self-checks fields with the model route, one model call per request, within the $10 spend cap;
 local mode does not draft. The saved-state routes under `/api`

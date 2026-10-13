@@ -8,6 +8,7 @@ import pytest
 
 from studio.state import sources
 from studio.state.store import StorageError
+from studio.ui.pages import ASSET_VERSION
 from tests.state.helpers import POLICY, field, two_page_pdf
 
 DETAILS = {
@@ -37,7 +38,7 @@ def test_the_editor_carries_the_saved_revision_and_page_sizes(local, services):
     template = make(services, [field()])
     page = local.get(f"/templates/{template['id']}/edit")
     assert page.status_code == 200
-    assert '<script src="/static/editor.js" defer></script>' in page.text
+    assert f'<script src="/static/editor.js?v={ASSET_VERSION}" defer></script>' in page.text
     data = embedded(page)
     assert data["template"]["revision"] == 2 and data["template"]["fields"] == template["fields"]
     assert [p["page"] for p in data["pages"]] == [1, 2]
