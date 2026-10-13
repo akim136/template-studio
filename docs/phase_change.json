@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "A shorter README: what the studio is and what works today, what it is built on, how to run and check it, and where the rules live (the guide and tests)."
+  "summary": "Guide cleanup before the repository is shared: account, bucket and host identifiers are replaced by their roles. No code changes."
 }
