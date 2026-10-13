@@ -25,6 +25,7 @@ import http.client
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -40,6 +41,8 @@ TIMEOUT_S = 30
 UPLOAD_EXPIRY_S = 600
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 RETRY_STATUSES = frozenset({409, 429, 500, 502, 503, 504})
+LIST_PAGES = 50  # ListObjectsV2 pages of up to 1,000 names each
+S3_XML = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 # (method, url, headers, body, timeout) -> (status, lowercase headers, body). Raises OSError
 # (urllib's URLError and TimeoutError included) when no answer arrives, or an
@@ -156,6 +159,29 @@ class R2ObjectStore:
     def replace(self, key: str, data: bytes, etag: str) -> str:
         return self._write(key, data, {"if-match": etag})
 
+    def children(self, prefix: str) -> list[str]:
+        check_key(prefix.rstrip("/"))
+        query = {"delimiter": "/", "list-type": "2", "prefix": prefix}
+        names: set[str] = set()
+        for _ in range(LIST_PAGES):
+            path = f"/{self.credentials.bucket}"
+            status, _, body, _ = self._request("GET", path, query, b"", {}, f"list {prefix}")
+            if status != 200:
+                raise StorageError(f"cannot list {prefix}: R2 answered {status}")
+            try:
+                root = ElementTree.fromstring(body)
+            except ElementTree.ParseError:
+                raise StorageError(f"cannot list {prefix}: R2 sent a broken listing") from None
+            for found in root.iterfind(f"{S3_XML}CommonPrefixes/{S3_XML}Prefix"):
+                names.add((found.text or "").removeprefix(prefix).rstrip("/"))
+            for found in root.iterfind(f"{S3_XML}Contents/{S3_XML}Key"):
+                names.add((found.text or "").removeprefix(prefix))
+            token = root.findtext(f"{S3_XML}NextContinuationToken")
+            if root.findtext(f"{S3_XML}IsTruncated") != "true" or not token:
+                return sorted(name for name in names if name)
+            query = {**query, "continuation-token": token}
+        raise StorageError(f"cannot list {prefix}: more than {LIST_PAGES} pages")
+
     def presign_put(self, key: str, length: int, expires: int = UPLOAD_EXPIRY_S) -> str:
         """A URL that lets its holder PUT exactly `length` bytes to `key` until it expires."""
         check_key(key)
@@ -192,12 +218,25 @@ class R2ObjectStore:
     def _send(
         self, method: str, key: str, body: bytes, extra: Mapping[str, str]
     ) -> tuple[int, dict, bytes, bool]:
+        path = f"/{self.credentials.bucket}/{check_key(key)}"
+        action = f"{'write' if method == 'PUT' else 'read'} {key}"
+        return self._request(method, path, {}, body, extra, action)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        query: Mapping[str, str],
+        body: bytes,
+        extra: Mapping[str, str],
+        action: str,
+    ) -> tuple[int, dict, bytes, bool]:
         """Sends one signed request, retrying when no clear answer comes. The flag says whether an
         earlier attempt of this write may have landed."""
-        check_key(key)
         credentials = self.credentials
-        path = f"/{credentials.bucket}/{key}"
         url = f"https://{credentials.host}{_encode(path, True)}"
+        if query:
+            url += f"?{_canonical_query(query)}"
         unknown = False
         failure = "no attempt was made"
         for attempt in range(ATTEMPTS):
@@ -212,7 +251,13 @@ class R2ObjectStore:
                 **extra,
             }
             names, signature_hex = signature(
-                credentials.secret_access_key, method, path, {}, headers, payload_sha256, amz_date
+                credentials.secret_access_key,
+                method,
+                path,
+                query,
+                headers,
+                payload_sha256,
+                amz_date,
             )
             scope = f"{amz_date[:8]}/{REGION}/{SERVICE}/aws4_request"
             headers["authorization"] = (
@@ -230,7 +275,7 @@ class R2ObjectStore:
                 unknown = unknown or (method == "PUT" and status >= 500)
                 continue
             return status, answer, data, unknown
-        raise StorageError(f"cannot {'write' if method == 'PUT' else 'read'} {key}: {failure}")
+        raise StorageError(f"cannot {action}: {failure}")
 
 
 def _etag(headers: Mapping[str, str], key: str) -> str:

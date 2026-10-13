@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% set details = template.details %}
+{% set title = details.title or 'Untitled' %}
+{% block title %}Edit {{ title }}{% endblock %}
+{% block head %}<script src="/static/editor.js" defer></script>{% endblock %}
+{% block body %}
+<main class="editor" data-editor>
+  <script type="application/json" data-editor-data>{{ data | tojson }}</script>
+  <div class="editor-bar">
+    <a class="button button-small" href="/templates/{{ template.id }}" aria-label="Back to the record" data-leave><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l14 0"></path><path d="M5 12l6 6"></path><path d="M5 12l6 -6"></path></svg>Record</a>
+    <div class="editor-title">
+      <strong title="{{ title }}">{{ title }}</strong>
+      <span>{{ details.sponsor_name or 'Unassigned' }}{% if details.sponsor_account_id %} · <span class="mono">{{ details.sponsor_account_id }}</span>{% endif %} · {{ mode_label(template.policy.countersigner) }}</span>
+    </div>
+    <span class="header-spacer"></span>
+    <span class="mono small" data-revision></span>
+    <span class="save-state" role="status" aria-live="polite" data-save-state><span class="dot" aria-hidden="true"></span><span data-save-label></span></span>
+    <span class="small approval-state" data-approval-label></span>
+    <button class="button button-small" type="button" hidden data-discard>Discard changes</button>
+    <button class="button button-small" type="button" data-open-preflight>Review and approve</button>
+    <button class="button button-small button-primary" type="button" data-save>Save</button>
+  </div>
+  <div class="editor-banners" data-banners></div>
+  <div class="editor-body">
+    <nav class="editor-pages" aria-label="Pages">
+      <div class="pages-head">
+        <div class="pages-title"><strong>Pages</strong><span class="small muted" data-coverage></span></div>
+        <div class="segmented" role="group" aria-label="Page filter">
+          <button type="button" aria-pressed="true" data-filter="all">All pages</button>
+          <button type="button" aria-pressed="false" data-filter="with">With fields</button>
+        </div>
+      </div>
+      <ol class="page-list" data-page-list></ol>
+    </nav>
+    <section class="editor-canvas" aria-label="Document canvas">
+      <div class="canvas-tools" role="toolbar" aria-label="Canvas tools">
+        <button class="icon-button" type="button" aria-label="Previous page" title="Previous page (PageUp)" data-prev>‹</button>
+        <label class="page-input">Page <input class="input" inputmode="numeric" aria-label="Current page" data-page-input> <span class="muted">of {{ data.pages | length }}</span></label>
+        <button class="icon-button" type="button" aria-label="Next page" title="Next page (PageDown)" data-next>›</button>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <div class="segmented" role="group" aria-label="Zoom" data-zooms>
+          <button type="button" data-zoom="0.75">75%</button>
+          <button type="button" data-zoom="1">100%</button>
+          <button type="button" data-zoom="1.25">125%</button>
+          <button type="button" data-zoom="1.5">150%</button>
+          <button type="button" data-zoom="fit">Fit width</button>
+        </div>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <div class="add-field">
+          <button class="button button-small" type="button" aria-haspopup="dialog" aria-expanded="false" data-add-toggle>+ Add field</button>
+          <div class="popover" role="dialog" aria-label="Add field" hidden data-add-menu>
+            <span class="label" id="add-who">Who fills it in</span>
+            <div class="recipients" role="radiogroup" aria-labelledby="add-who" data-recipients></div>
+            <label class="stack-tight" hidden data-add-merge-row><span class="label">Homebase mapping</span>
+              <select class="select" data-add-merge></select>
+            </label>
+            <span class="label" id="add-type">Field type, then click the page</span>
+            <div class="type-grid" role="group" aria-labelledby="add-type" data-add-types></div>
+          </div>
+        </div>
+        <span class="header-spacer"></span>
+        <button class="button button-small" type="button" title="Undo (Ctrl/Cmd+Z)" data-undo>Undo</button>
+        <button class="button button-small" type="button" title="Redo (Shift+Ctrl/Cmd+Z)" data-redo>Redo</button>
+      </div>
+      <div class="canvas-scroll" data-canvas>
+        <div class="placing-note" role="status" hidden data-placing><span data-placing-text></span><button class="button button-small" type="button" data-cancel-place>Cancel</button></div>
+        <div class="canvas-pad">
+          <div class="sheet" data-sheet>
+            <img alt="" draggable="false" data-sheet-image>
+            <div class="sheet-note" hidden data-sheet-note></div>
+            <div class="boxes" data-boxes></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <aside class="editor-inspector" aria-label="Properties">
+      <div class="inspector-panel" hidden data-field-panel>
+        <div class="panel-head">
+          <div class="stack-tight">
+            <span class="eyebrow" data-field-where></span>
+            <strong class="panel-title" data-field-title></strong>
+            <span class="small muted mono" data-field-id></span>
+          </div>
+          <button class="icon-button" type="button" aria-label="Deselect field" data-deselect>×</button>
+        </div>
+        <div class="alert alert-red" role="alert" hidden data-field-problem></div>
+        <label class="stack-tight"><span class="label">Filled by</span>
+          <select class="select" data-prop="signer"></select>
+        </label>
+        <label class="stack-tight"><span class="label">Type</span>
+          <select class="select" data-prop="type"></select>
+        </label>
+        <label class="stack-tight" hidden data-merge-row><span class="label">Homebase mapping</span>
+          <select class="select" data-prop="name"></select>
+          <span class="help">Stored key: <span class="mono" data-merge-key></span>. email and emailAddress are distinct.</span>
+        </label>
+        <div class="stack-tight">
+          <span class="label" id="p-req">Completion</span>
+          <div class="segmented" role="group" aria-labelledby="p-req">
+            <button type="button" data-required="true">Required</button>
+            <button type="button" data-required="false">Optional</button>
+          </div>
+        </div>
+        <div class="stack-tight">
+          <span class="label">Position and size (PDF points)</span>
+          <div class="geometry">
+            <label>X<input class="input" inputmode="decimal" data-geom="x"></label>
+            <label>Y<input class="input" inputmode="decimal" data-geom="y"></label>
+            <label>Width<input class="input" inputmode="decimal" data-geom="width"></label>
+            <label>Height<input class="input" inputmode="decimal" data-geom="height"></label>
+          </div>
+          <span class="help">From the page's top left. Arrow keys move 1 pt, Shift 10 pt; Alt with an arrow resizes.</span>
+        </div>
+        <div class="actions"><button class="button button-small button-danger" type="button" data-delete>Delete field</button></div>
+      </div>
+      <div class="inspector-panel" data-page-panel>
+        <div class="stack-tight">
+          <span class="eyebrow">Page summary</span>
+          <strong class="panel-title" data-page-title></strong>
+          <span class="small muted" data-page-dims></span>
+        </div>
+        <div class="stack-tight">
+          <span class="label">Fields on this page</span>
+          <ul class="field-list" data-page-fields></ul>
+          <p class="help" hidden data-page-empty>No fields on this page. Use Add field to place one.</p>
+        </div>
+        <div class="stack-tight">
+          <span class="label" data-issues-title>Issues</span>
+          <ul class="issue-list" data-issues></ul>
+        </div>
+        <div class="stack-tight legend">
+          <span class="label">Overlay key</span>
+          <span><span class="tag role-0">C</span> Client</span>
+          {% if template.policy.countersigner %}<span><span class="tag role-1">S</span> CounterSigner</span>{% endif %}
+          <span><span class="tag role-sender">M</span> Homebase prefill (sender)</span>
+          <span class="help">A red outline and ! mark a field that cannot be saved as it is. Select a field to edit it.</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <dialog class="drawer" aria-labelledby="pf-title" data-preflight>
+    <div class="drawer-head">
+      <div><h2 id="pf-title">Review and approval</h2><span class="small muted" data-pf-subtitle></span></div>
+      <button class="icon-button" type="button" aria-label="Close" data-pf-close>×</button>
+    </div>
+    <div class="drawer-body">
+      <div class="alert alert-yellow" hidden data-pf-unsaved>Save your changes first: review and approval apply to a saved revision.</div>
+      <section><h3>Exact revision under review</h3><dl class="facts" data-pf-identity></dl></section>
+      <section><h3>Fields by recipient</h3><dl class="facts" data-pf-roles></dl></section>
+      <section><h3>Merge mappings</h3><dl class="facts" data-pf-merges></dl></section>
+      <section><h3 data-pf-pages-title>Pages with fields</h3><ul class="field-list" data-pf-pages></ul></section>
+      <section><h3>Unresolved issues</h3><ul class="issue-list" data-pf-issues></ul></section>
+      <section><h3>Signing template</h3><div class="stack-tight" data-pf-operation></div></section>
+    </div>
+    <div class="drawer-foot">
+      <label class="check confirm"><input type="checkbox" data-pf-confirm>
+        <span><strong data-pf-confirm-label>I reviewed every field on this revision</strong><span class="help" data-pf-confirm-help></span></span>
+      </label>
+      <div class="alert alert-red" role="alert" hidden data-pf-error></div>
+      <div class="actions">
+        <button class="button" type="button" data-pf-close>Close</button>
+        <button class="button" type="button" hidden data-pf-check>Check status</button>
+        <button class="button button-primary" type="button" data-pf-approve>Approve and create</button>
+      </div>
+      <p class="help">Approval binds this exact revision: its source, fields, policy and details. Creating is simulated: this studio has no signing-provider connection, so it records the template and sends nothing. The drawer closes and the create is walked through step by step. Any later save needs a new review and approval.</p>
+    </div>
+  </dialog>
+
+  <dialog class="completion" aria-labelledby="cp-title" data-completion>
+    <div class="completion-head"><h2 id="cp-title" data-cp-title>Create test template</h2></div>
+    <div class="completion-body">
+      <p class="completion-lead" data-cp-lead></p>
+      <span class="mono small muted" data-cp-operation></span>
+      <ol class="cp-steps" aria-label="Create progress" data-cp-steps></ol>
+      <div class="cp-result" role="status" hidden data-cp-result><strong data-cp-result-title></strong><span data-cp-result-body></span></div>
+      <div class="cp-verify" hidden data-cp-verify></div>
+    </div>
+    <div class="completion-foot">
+      <span class="small muted" hidden data-cp-working>Working. Closing is disabled until the operation reports a state.</span>
+      <div class="actions" data-cp-actions></div>
+    </div>
+  </dialog>
+
+  <dialog aria-labelledby="discard-title" data-discard-dialog>
+    <h2 id="discard-title">Discard your changes?</h2>
+    <p data-discard-text>Your unsaved changes are lost, and the editor shows the saved revision again.</p>
+    <div class="actions">
+      <button class="button" type="button" autofocus data-discard-cancel>Keep editing</button>
+      <button class="button button-danger" type="button" data-discard-confirm>Discard changes</button>
+    </div>
+  </dialog>
+</main>
+{% endblock %}

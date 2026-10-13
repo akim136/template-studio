@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% set details = template.details %}
+{% block title %}{{ details.title or 'Untitled' }}{% endblock %}
+{% block body %}
+<main class="page page-record">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Templates</a><span aria-hidden="true">/</span><span aria-current="page">{{ details.title or 'Untitled' }}</span>
+  </nav>
+  <h1>{{ details.title or 'Untitled' }}<span class="chips"><span class="chip tone-{{ status.tone }}">{{ status.label }}</span><span class="chip tone-gray">Read-only</span></span></h1>
+  <div class="actions">
+    <a class="button button-primary" href="/templates/{{ template.id }}/edit">Edit fields</a>
+    {% if not viewer.local %}<a class="button" href="/templates/{{ template.id }}/analyzing">Draft fields</a>{% endif %}
+  </div>
+  {% if viewer.local %}
+    <p class="help">Field drafting runs on the hosted studio, not in local mode.</p>
+  {% endif %}
+  {% if template.issues %}
+    <div class="alert alert-yellow" role="status">
+      <strong>Review and approval are blocked:</strong>
+      <ul class="flags">{% for issue in template.issues %}<li>{{ issue }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+  <div class="record-grid">
+    <section class="card card-pad" aria-labelledby="record-details">
+      <h2 id="record-details">Record details</h2>
+      <dl class="facts">
+        <dt>Template ID</dt><dd class="mono">{{ template.id }}</dd>
+        <dt>Sponsor account</dt>
+        <dd>{% if details.sponsor_name %}{{ details.sponsor_name }}{% if details.sponsor_account_id %} <span class="mono muted">{{ details.sponsor_account_id }}</span>{% endif %}{% else %}<span class="unassigned">Unassigned</span>{% endif %}</dd>
+        <dt>Signature mode</dt><dd>{{ mode_label(template.policy.countersigner) }}</dd>
+        <dt>Required by policy</dt><dd>{{ required | join(', ') if required else 'Nothing' }}</dd>
+        <dt>Revision</dt><dd>{{ template.revision }} · saved {{ template.saved_at | when }}</dd>
+        <dt>Review</dt><dd>{% if template.review %}Confirmed by {{ template.review.by }} · {{ template.review.at | when }}{% else %}Not confirmed{% endif %}</dd>
+        <dt>Approval</dt><dd>{% if template.approval %}Approved by {{ template.approval.by }} · {{ template.approval.at | when }}{% else %}Not approved{% endif %}</dd>
+        <dt>Signing operation</dt>
+        <dd>{% if operation %}{{ operation.state | replace('_', ' ') | lower | capitalize }} · revision {{ operation.revision }} · <span class="mono">{{ operation.id[:12] }}</span>{% else %}None{% endif %}</dd>
+      </dl>
+    </section>
+    <section class="card card-pad" aria-labelledby="record-source">
+      <h2 id="record-source">Source and field map</h2>
+      <dl class="facts">
+        <dt>Source SHA-256</dt><dd class="mono">{{ template.source_sha256[:12] }}…{{ template.source_sha256[-4:] }}</dd>
+        {% if source %}
+          <dt>Pages</dt><dd>{{ source.pages | length }} · inventory {{ source.inventory }}</dd>
+          <dt>Size</dt><dd>{{ '{:,}'.format(source.size) }} bytes</dd>
+        {% endif %}
+        <dt>Fields</dt>
+        <dd>{% if by_role %}{% for role, count in by_role.items() %}{{ role }} {{ count }}{{ ', ' if not loop.last }}{% endfor %}{% else %}No fields yet{% endif %}</dd>
+      </dl>
+      {% if template.source.flags %}
+        <p class="help">Source flags:</p>
+        <ul class="flags">{% for flag in template.source.flags %}<li>{% if flag.page %}Page {{ flag.page }}: {% endif %}{{ flag.reason }}</li>{% endfor %}</ul>
+      {% endif %}
+    </section>
+  </div>
+</main>
+{% endblock %}

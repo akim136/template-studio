@@ -36,3 +36,41 @@ The following are **not imported**:
 - `baseline/` and `release/` copies;
 - the non-Clean `Template Studio.dc.html`;
 - the root `fixtures/*.json` used by the non-Clean prototype.
+
+## PR4 slice 4a, as built
+
+Slice 4a (`feat/studio-core-ui`) confirms these rows. Slice 4b covers D-06; slice 4c covers the editor rows D-07 to D-12 and draft-from-record (D-13).
+
+| ID | Confirmed target | Notes |
+|---|---|---|
+| D-01 | `templates/base.html`, `static/studio.css` | The tokens are CSS variables. The pages carry a strict content security policy: no inline script or style, and `connect-src` adds the R2 host only in hosted mode. |
+| D-02 | `templates/library.html`, `studio/ui/pages.py`, `GET /api/templates` | The server does the tabs, search, signature-mode filter, sort and paging. The export's Origin column and legacy footnote are left out, because there are no legacy imports. A library that cannot be read shows an error, never an empty library. A tab, sort, page or search swaps the results in place (the same page is fetched and its main region replaced), and anything unexpected falls back to a normal load. |
+| D-03 | `studio/state/lifecycle.py` | Adds one label the export lacks, Unreadable, for a template whose saved state cannot be read. It is listed under Failed. |
+| D-04 | `templates/setup.html`, `static/setup.js`, `studio/state/policy.py` | **Proposed:** the operator types the sponsor account name and an optional account ID, since the studio has no account directory. They are saved in the revision with the title and are part of the review binding. Details the API receives must name the sponsor; a request without details is still accepted, so templates created before this slice stay valid. Until slice 4b the primary button reads "Create draft", and it saves revision 1 with no fields. The case's requirements show as chips. By default they are the signatures of the chosen mode: the Client's, plus the CounterSigner's when countersigned. "Change what this case requires" opens the full list. |
+| D-05 | `static/setup.js` | Hosted mode uses direct R2 upload (`/api/uploads`, then seal). Local mode posts to `/api/sources`. The browser hashes the file first and checks that the studio sealed the same SHA-256. A file the studio refuses (not a readable PDF, or too large) is Unsupported and offers no retry. |
+| D-13 | `templates/record.html` | Read-only for now. It shows the saved revision, its source, its review and approval, its operation, and the reasons review is blocked. |
+| D-14 | — | Still rejected. Hosted pages send a visitor without a session to Sign in with Vercel (PR #8), and a browser that opens `/auth/me` is redirected to the library. |
+| D-16 | — | Still rejected. Setup has no model row. |
+| D-17 | — | No sample packet and no fixture fields. Every test file is synthetic. |
+
+The only dependency change is Jinja2, which Alex approved on October 12, 2026.
+
+## PR4 slice 4b, as built
+
+| ID | Confirmed target | Notes |
+|---|---|---|
+| D-06 | `templates/analyzing.html`, `static/analyzing.js`, `studio/state/drafts.py`, `studio/state/ledger.py` | The export's five stages and layout, driven by a real draft rather than a timer. Each stage shows the server's counts: pages read and the inventory, pages through drafting, pages through the check, and the saved revision. A stop (spend cap, route violation, failed route check) marks the stages Stopped and gives the reason. A partial result lists each unfinished page's reason. The export's "Retry this stage" becomes Continue drafting, since a call with an unknown outcome is never sent again. Leaving pauses rather than stops: calls already sent finish and are kept. A finished draft saves its fields as a revision for whoever started it and opens the editor, with no click. A draft that found no fields also opens the editor, and says so there. **Proposed:** in local mode the screen says drafting runs on the hosted studio. |
+| D-16 | — | Still rejected. There is no model selector; the screen names no model and spends only through the route Alex chose. |
+
+## PR4 slice 4c, as built
+
+| ID | Confirmed target | Notes |
+|---|---|---|
+| D-07 | `static/editor.js`, `templates/editor.html`, `GET /api/sources/{sha256}/pages/{n}.png` | One script, no framework. The page is a PNG rendered once from the sealed bytes; boxes sit over it in PDF points from the page's top left, so zoom never changes stored geometry. Drag, the resize handle and arrow keys (1 pt, Shift 10 pt, Alt resizes) all clamp to the page and round to 0.01 pt. Undo and redo keep up to 200 steps. Add field asks for the recipient first, then the type, then a click on the page. |
+| D-08 | `templates/editor.html` | Filled by, type, Homebase mapping (merge fields only, from the whitelist), required or optional, and the box in points. Changing the recipient to or from Homebase prefill switches between signing and merge types. No new field types. |
+| D-09 | `studio/state/templates.py`, `static/editor.js` | Save sends the base revision and one `save_id` per content, reused when retrying the same content. A 409 shows the newer revision and offers only to discard and load it; a failure shows the reason and Retry, never Saved. Discard reloads the acknowledged snapshot. |
+| D-10, D-11 | `studio/state/templates.py`, the review drawer in `templates/editor.html` | The export's "Approve and create" is two calls: approval, then the create. Confirming review is its own call. Both apply to the saved revision; unsaved changes block them, and any save clears them on the server. Selection, page and zoom are not edits. |
+| D-12 | `studio/state/signing.py`, the review drawer | Simulated create. An open operation offers only Check status; orphans are listed with their warning and refuse a create. A create closes the review drawer and continues in a completion modal: create, verify existence and counts, created. The provider is named generically. |
+| D-13 | `templates/record.html` | The record links to the editor (Edit fields), and a finished draft opens the editor by itself. The editor's back button returns to the record. |
+
+Not built in 4c, and not needed for the PR4 gate: field labels (the server schema has no label), the export's "Ignore this blank" areas, changing the signature policy from the editor (it is shown, not edited), page thumbnails in the page list, a field's provenance line, and one-click fixes in the issue list (an issue selects its field instead).

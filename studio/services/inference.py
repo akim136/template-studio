@@ -44,7 +44,7 @@ from studio.services.fields import (
     stage_schema,
 )
 from studio.services.overlay import draw_boxes
-from studio.services.render import encode_png, render_rgb
+from studio.services.render import RgbImage, encode_png, render_rgb
 from studio.services.spend import BudgetExceeded, SpendLedger
 
 PROFILE = "PROVISIONAL_DEVELOPMENT"
@@ -339,83 +339,126 @@ class Runner:
             return evidence, done.get("a"), None
 
     def _page(self, evidence: PageEvidence, done: dict, number: int, page_candidates):
+        stopped = self.stop.reason if self.stop.event.is_set() else ""
         record = self.analysis.pages[number - 1]
-        evidence.text_chars = len(record.text)
-        evidence.candidates = len(page_candidates.candidates)
-        notes = [page_candidates.reason] if page_candidates.reason else []
-        if page_candidates.truncated_from:
-            notes.insert(0, f"cut from {page_candidates.truncated_from}")
-        evidence.candidates_note = "; ".join(notes)
-        if self.stop.event.is_set():
-            evidence.stage_a = f"NOT_RUN: {self.stop.reason}"
+        prepared = prepare(self.source, record, page_candidates, evidence, stopped)
+        if prepared is None:
             return evidence, None, None
-        if page_candidates.rotation or record.rotation:
-            evidence.stage_a = "NOT_RUN: rotated page; its fields need an audited normalizer"
-            return evidence, None, None
-        if record.image is None:
-            evidence.stage_a = f"NOT_RUN: no page image ({record.image_reason})"
-            return evidence, None, None
-        # The visible area as PDFium renders it: the image, the candidates and the fields all
-        # use this frame, measured from its top-left corner.
-        size = (page_candidates.width_pt, page_candidates.height_pt)
-        if min(size) <= 0:
-            evidence.stage_a = f"NOT_RUN: the page was not measured ({page_candidates.reason})"
-            return evidence, None, None
-        media = (record.width_pt, record.height_pt)
-        if None not in media and max(abs(a - b) for a, b in zip(size, media, strict=True)) > 0.5:
-            evidence.geometry_note = (
-                f"the visible area is {size[0]:g} x {size[1]:g} pt and the media box "
-                f"{media[0]:g} x {media[1]:g} pt; coordinates are from the visible area"
-            )
-        scale = MODEL_IMAGE_SHORT_SIDE / min(size)
-        try:
-            image = render_rgb(self.source, number, scale)
-        except Exception as error:
-            evidence.stage_a = f"NOT_RUN: render failed: {type(error).__name__}: {error}"
-            return evidence, None, None
-        png = encode_png(image)
-        evidence.image_sha256 = hashlib.sha256(png).hexdigest()
-        evidence.image_size_px, evidence.scale = [image.width, image.height], round(scale, 4)
-
-        text = record.text[:MAX_TEXT_CHARS]
-        evidence.text_sent_chars = len(text)
-        cut = f" (cut from {len(record.text)} characters)" if len(text) < len(record.text) else ""
-        candidates = page_candidates.candidates
-        context = (
-            f"Page {number}. The image is {image.width} x {image.height} pixels.\n"
-            f"{_candidate_lines(page_candidates, scale)}\n\nPage text{cut}:\n{text}"
-        )
-        rules = self.config.rules()
-        evidence.stage_a, stage_a = self._stage(
-            evidence, "A", STAGE_A.format(rules=rules), context, png, candidates, scale, size, False
-        )
+        stage_a = self.stage_a(evidence, prepared)
         if stage_a is None:
             return evidence, None, None
         done["a"] = stage_a
-        if not stage_a.fields and not stage_a.rejected and not candidates:
+        return evidence, stage_a, self.stage_b(evidence, prepared, stage_a)
+
+    def stage_a(self, evidence: PageEvidence, prepared: Prepared) -> StageOutput | None:
+        """The first draft of one page; None, with the reason in evidence, when it failed."""
+        evidence.stage_a, output = self._stage(
+            evidence,
+            "A",
+            STAGE_A.format(rules=self.config.rules()),
+            prepared.context,
+            prepared.png,
+            prepared.candidates,
+            prepared.scale,
+            prepared.size,
+            False,
+        )
+        return output
+
+    def stage_b(
+        self, evidence: PageEvidence, prepared: Prepared, stage_a: StageOutput
+    ) -> StageOutput | None:
+        """The self-check of one page's first draft; None, with the reason in evidence, when it
+        failed. A page with nothing drafted, rejected or proposed needs no check."""
+        if not stage_a.fields and not stage_a.rejected and not prepared.candidates:
             evidence.stage_b = "NOT_NEEDED: no draft fields, no rejected fields, no candidates"
             evidence.inspected = True
-            return evidence, stage_a, StageOutput([], [], "", [], "")
+            return StageOutput([], [], "", [], "")
+        scale = prepared.scale
         boxes = [
             (n, f.type, f.x * scale, f.y * scale, f.width * scale, f.height * scale)
             for n, f in enumerate(stage_a.fields, start=1)
         ]
-        overlay_png = encode_png(draw_boxes(image, boxes))
-        check_context = context + "\n\n" + _draft_lines(stage_a.fields, scale)
+        overlay_png = encode_png(draw_boxes(prepared.image, boxes))
+        check_context = prepared.context + "\n\n" + _draft_lines(stage_a.fields, scale)
         evidence.stage_b, stage_b = self._stage(
             evidence,
             "B",
-            STAGE_B.format(rules=rules),
+            STAGE_B.format(rules=self.config.rules()),
             check_context,
             overlay_png,
-            candidates,
+            prepared.candidates,
             scale,
-            size,
+            prepared.size,
             True,
         )
         evidence.inspected = stage_b is not None
         evidence.final_rejected = len(stage_b.rejected) if stage_b is not None else 0
-        return evidence, stage_a, stage_b
+        return stage_b
+
+
+@dataclass
+class Prepared:
+    """What both stages of one page send: its image, candidates and text, in one frame."""
+
+    image: RgbImage
+    png: bytes
+    candidates: list
+    scale: float  # image pixels per source point
+    size: tuple[float, float]  # the visible area in points
+    context: str
+
+
+def prepare(source, record, page_candidates, evidence, stopped: str = "") -> Prepared | None:
+    """Measure, render and describe one page for the model. Returns None, with the reason in
+    `evidence.stage_a`, when the page is not to be sent. `record` is the page's analysis record;
+    `stopped` is why the run stopped, if it has."""
+    number = evidence.page
+    evidence.text_chars = len(record.text)
+    evidence.candidates = len(page_candidates.candidates)
+    notes = [page_candidates.reason] if page_candidates.reason else []
+    if page_candidates.truncated_from:
+        notes.insert(0, f"cut from {page_candidates.truncated_from}")
+    evidence.candidates_note = "; ".join(notes)
+    if stopped:
+        evidence.stage_a = f"NOT_RUN: {stopped}"
+        return None
+    if page_candidates.rotation or record.rotation:
+        evidence.stage_a = "NOT_RUN: rotated page; its fields need an audited normalizer"
+        return None
+    if record.image is None:
+        evidence.stage_a = f"NOT_RUN: no page image ({record.image_reason})"
+        return None
+    # The visible area as PDFium renders it: the image, the candidates and the fields all
+    # use this frame, measured from its top-left corner.
+    size = (page_candidates.width_pt, page_candidates.height_pt)
+    if min(size) <= 0:
+        evidence.stage_a = f"NOT_RUN: the page was not measured ({page_candidates.reason})"
+        return None
+    media = (record.width_pt, record.height_pt)
+    if None not in media and max(abs(a - b) for a, b in zip(size, media, strict=True)) > 0.5:
+        evidence.geometry_note = (
+            f"the visible area is {size[0]:g} x {size[1]:g} pt and the media box "
+            f"{media[0]:g} x {media[1]:g} pt; coordinates are from the visible area"
+        )
+    scale = MODEL_IMAGE_SHORT_SIDE / min(size)
+    try:
+        image = render_rgb(source, number, scale)
+    except Exception as error:
+        evidence.stage_a = f"NOT_RUN: render failed: {type(error).__name__}: {error}"
+        return None
+    png = encode_png(image)
+    evidence.image_sha256 = hashlib.sha256(png).hexdigest()
+    evidence.image_size_px, evidence.scale = [image.width, image.height], round(scale, 4)
+
+    text = record.text[:MAX_TEXT_CHARS]
+    evidence.text_sent_chars = len(text)
+    cut = f" (cut from {len(record.text)} characters)" if len(text) < len(record.text) else ""
+    context = (
+        f"Page {number}. The image is {image.width} x {image.height} pixels.\n"
+        f"{_candidate_lines(page_candidates, scale)}\n\nPage text{cut}:\n{text}"
+    )
+    return Prepared(image, png, page_candidates.candidates, scale, size, context)
 
 
 def _status(stop: _Stop, evidence: list[PageEvidence], analysis: AnalysisResult) -> str:

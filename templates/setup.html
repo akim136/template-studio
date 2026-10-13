@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}New template{% endblock %}
+{% block head %}<script src="/static/setup.js" defer></script>{% endblock %}
+{% block body %}
+<main class="page page-setup" data-setup data-upload="{{ upload }}" data-drafting="{{ 'local' if viewer.local else 'hosted' }}" data-max-bytes="{{ max_bytes }}">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/" data-cancel>Templates</a><span aria-hidden="true">/</span><span aria-current="page">New template</span>
+  </nav>
+  <h1>New template</h1>
+  <div class="setup-grid">
+    <div class="setup-main">
+      <section class="card card-pad" aria-labelledby="sec-sponsor">
+        <div class="section-head">
+          <span class="step" aria-hidden="true">1</span>
+          <div>
+            <h2 id="sec-sponsor">Name the sponsor account</h2>
+            <p>The business context for this template, as you know it. The studio has no account directory, so type it exactly; it is never inferred from a title or file name.</p>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label class="label" for="sponsor-name">Sponsor account name</label>
+            <input class="input" id="sponsor-name" maxlength="200" autocomplete="off" required data-sponsor-name>
+          </div>
+          <div>
+            <label class="label" for="sponsor-id">Account ID <span class="muted">(optional)</span></label>
+            <input class="input mono" id="sponsor-id" maxlength="64" autocomplete="off" data-sponsor-id>
+          </div>
+        </div>
+      </section>
+
+      <section class="card card-pad" aria-labelledby="sec-doc">
+        <div class="section-head">
+          <span class="step" aria-hidden="true">2</span>
+          <div>
+            <h2 id="sec-doc">Add the PDF</h2>
+            <p>One PDF, up to {{ (max_bytes / 1048576) | round(0) | int }} MiB. It is sealed under its SHA-256 and can't be replaced; a different PDF needs a new template.</p>
+          </div>
+        </div>
+        <input class="visually-hidden" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" data-file-input>
+        <div class="drop" data-drop>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--gray-6)" stroke-width="1.5" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"></path></svg>
+          <strong>Drop a PDF here</strong>
+          <span class="muted small">PDF only.</span>
+          <button class="button" type="button" data-pick>Choose PDF…</button>
+        </div>
+        <div class="file-card" hidden data-file-card>
+          <div class="file-head">
+            <div>
+              <div class="file-name" data-file-name></div>
+              <div class="muted small" data-file-meta></div>
+            </div>
+            <span class="chip tone-blue" data-file-state></span>
+          </div>
+          <div class="progress" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden data-progress><div></div></div>
+          <div class="small" data-file-message></div>
+          <dl class="facts" hidden data-file-facts></dl>
+          <ul class="flags" hidden data-file-flags></ul>
+          <div class="actions" data-file-actions></div>
+        </div>
+      </section>
+
+      <section class="card card-pad" aria-labelledby="sec-policy">
+        <div class="section-head">
+          <span class="step" aria-hidden="true">3</span>
+          <div>
+            <h2 id="sec-policy">Choose who signs</h2>
+            <p>Merge fields are filled by the sender in both modes.</p>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="choices" role="radiogroup" aria-label="Signature policy">
+            <label class="choice">
+              <input type="radio" name="mode" value="lp" data-mode>
+              <span><strong>LP signature only</strong><span>The investor signs as Client. Designated sponsor acceptance blocks are skipped on purpose.</span><span class="roles">Client</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="mode" value="countersign" checked data-mode>
+              <span><strong>LP + sponsor countersignature</strong><span>The investor signs as Client and an authorized sponsor signer countersigns as CounterSigner.</span><span class="roles">Client · CounterSigner</span></span>
+            </label>
+          </div>
+          <p class="help" data-mode-note></p>
+          <div class="requirements">
+            <span class="label" id="required-title">Required before review</span>
+            <ul class="requirement-chips" aria-labelledby="required-title" data-required-summary></ul>
+            <p class="help">Review and approval stay blocked until the fields include each of these. Each mode starts with its signatures only; there is no universal rule.</p>
+            <details class="more-requirements">
+              <summary>Change what this case requires</summary>
+              <fieldset class="required-list">
+                <legend class="visually-hidden">Required by this case's policy</legend>
+                {% for signer, kind, label in [(0, 'signature', 'Client signature'), (0, 'initials', 'Client initials'), (0, 'date_signed', 'Client date signed'), (1, 'signature', 'CounterSigner signature'), (1, 'date_signed', 'CounterSigner date signed')] %}
+                  <label class="check"{% if signer == 1 %} data-countersigner-only{% endif %}><input type="checkbox"{% if kind == 'signature' %} checked{% endif %} data-required data-signer="{{ signer }}" data-type="{{ kind }}"> {{ label }}</label>
+                {% endfor %}
+              </fieldset>
+            </details>
+          </div>
+          <div>
+            <label class="label" for="title">Template title</label>
+            <input class="input" id="title" maxlength="200" autocomplete="off" placeholder="Defaults from the account and file name" data-title>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <aside class="card card-pad summary" aria-label="Setup summary">
+      <h2>Summary</h2>
+      <dl class="facts" data-summary></dl>
+      <ul class="blockers" data-blockers></ul>
+      <div class="alert alert-red" role="alert" hidden data-create-error></div>
+      <button class="button button-primary button-wide" type="button" disabled data-create>Create draft</button>
+      <a class="button button-wide" href="/" data-cancel>Cancel</a>
+      {% if viewer.local %}
+        <p class="help">Creating saves revision 1 with no fields. Field drafting runs on the hosted studio, not in local mode.</p>
+      {% else %}
+        <p class="help">Creating saves revision 1 with no fields, then drafts its fields page by page with a model, within the studio's spend cap. You choose whether to save the result.</p>
+      {% endif %}
+    </aside>
+  </div>
+  <dialog data-discard-dialog>
+    <h2>Discard this setup?</h2>
+    <p>The sponsor account and policy are not saved yet. An uploaded PDF stays sealed but is not attached to anything.</p>
+    <div class="actions">
+      <button class="button" type="button" value="cancel" autofocus data-dialog-cancel>Keep editing</button>
+      <button class="button button-primary" type="button" data-dialog-discard>Discard</button>
+    </div>
+  </dialog>
+</main>
+{% endblock %}

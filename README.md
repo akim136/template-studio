@@ -4,10 +4,12 @@ Internal application for preparing signing templates from sponsor documents. The
 runs from sponsor and signer policy, through an AI field draft, field correction, review and
 approval, to a library record.
 
-**Status: P2 state boundary (local, and hosted on production and every preview).** `GET /healthz` reports `"analysis": "NOT_IMPLEMENTED"`
-because no app route analyzes anything yet. The shared analysis service reads the text layer and
-geometry of every page, renders every page, and flags pages the user must look at. Field drafting
-and self-check are `NOT_RUN` until the model route is wired in. The saved-state routes under `/api`
+**Status: P3 core interface, slice 4c: library, setup, record, Analyzing and field editor pages (local, and hosted on production and every preview), with in-app field drafting on the hosted studio only.** `GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`,
+which stops being accurate when this slice merges; changing it needs a scope update (guide
+section 10). The shared analysis service reads the text layer and geometry of every page, renders
+every page, and flags pages the user must look at. On the hosted studio, the Analyzing page drafts
+and self-checks fields with the model route, one model call per request, within the $10 spend cap;
+local mode does not draft. The saved-state routes under `/api`
 run against local disk, or on a deployment against Cloudflare R2 with Sign in with Vercel, always
 with a simulated signing adapter. There is no real signing provider. See
 [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for decisions, stages and gates, and
@@ -71,6 +73,14 @@ call and made read-only at the end. Stdout gets a summary with counts and spend 
 STUDIO_STATE_DIR=/path/outside/repo uv run --locked uvicorn app:app --host 127.0.0.1 --port 8773
 ```
 
+Then open `http://127.0.0.1:8773/` for the library. Setup (`/new`) uploads a PDF, takes the typed
+sponsor account and the signature policy, and saves revision 1 with no fields; the record page shows a
+saved template read-only, and its Edit fields link opens the field editor. The editor shows each page
+with the saved fields over it: add, move, resize and change fields, undo and redo, then save a new
+revision; review and approve that exact revision and run the simulated create from its review
+drawer. Drafting fields (the Analyzing page) runs on the hosted studio only. The pages follow the
+same rules as the `/api` routes below.
+
 Without `STUDIO_STATE_DIR`, and always on Vercel, every `/api` route answers 503 before any body
 is read: a deployment's disk is ephemeral, so saving there would be a false Saved. The directory
 must be outside the repository, a real directory (not a link), owned by you and owner-only (mode
@@ -83,6 +93,9 @@ names out; it is not a login, and any process on this machine is answered. A fai
 
 - `POST /api/sources` seals a PDF (raw body, at most 25 MiB) under its SHA-256, with its page
   inventory. This is the local stand-in for the direct R2 upload.
+- `GET /api/sources/{sha256}/pages/{n}.png` returns one page of a sealed source as a PNG for the
+  editor, rendered once from the sealed bytes and kept beside the source. It is sent with
+  `no-store`, so the browser does not keep the document's pages.
 - `POST /api/templates` starts a template at revision 1 from a sealed source and a signing policy
   (`countersigner`, and the `required` field types per signer).
 - `PUT /api/templates/{id}` saves `policy` and `fields` on top of `base_revision`. Every save makes

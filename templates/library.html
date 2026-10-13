@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Templates{% endblock %}
+{% block body %}
+<main class="page page-library" data-library>
+  <div class="title-row">
+    <div>
+      <h1>Templates</h1>
+      <p class="subline">{{ total }} template{{ '' if total == 1 else 's' }}</p>
+    </div>
+    <a class="button button-primary" href="/new">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5l0 14"></path><path d="M5 12l14 0"></path></svg>
+      New template
+    </a>
+  </div>
+
+  {% if not failed %}
+  <form class="filters" method="get" action="/" data-filters>
+    <nav class="tabs" aria-label="Status filter">
+      {% for key, label in tabs %}
+        <a class="tab" href="{{ link(tab=key, page=1) }}"{% if view.tab == key %} aria-current="page"{% endif %}>
+          <span>{{ label }}</span><span class="count">{{ counts[key] }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+    <span class="grow"></span>
+    {% if view.tab != 'all' %}<input type="hidden" name="tab" value="{{ view.tab }}">{% endif %}
+    {% if view.sort != 'updated' %}<input type="hidden" name="sort" value="{{ view.sort }}">{% endif %}
+    <input type="hidden" name="order" value="{{ view.order }}">
+    <div class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gray-6)" stroke-width="2" aria-hidden="true"><path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"></path><path d="M21 21l-6 -6"></path></svg>
+      <input class="input" type="search" name="q" value="{{ view.q }}" aria-label="Search templates by title, sponsor or account ID" placeholder="Search title, sponsor, or account ID">
+    </div>
+    <select class="select" name="mode" aria-label="Signature mode filter" data-autosubmit>
+      <option value="all"{% if view.mode == 'all' %} selected{% endif %}>All signature modes</option>
+      {% for key, label in modes.items() %}
+        <option value="{{ key }}"{% if view.mode == key %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+
+  <div class="card table-card">
+    {% if failed %}
+      <div class="empty" role="alert">
+        <strong>Templates could not be loaded</strong>
+        <span>Something went wrong reading saved templates. Nothing was changed.</span>
+        <a class="button button-small" href="/">Retry</a>
+      </div>
+    {% elif total == 0 %}
+      <div class="empty">
+        <strong>No templates yet</strong>
+        <span>Start with New template.</span>
+      </div>
+    {% elif not rows %}
+      <div class="empty">
+        <strong>No templates match these filters</strong>
+        <span>{% if view.q %}Nothing matches “{{ view.q }}” here. {% endif %}Try another status or signature mode.</span>
+        <a class="button button-small" href="/">Clear filters</a>
+      </div>
+    {% else %}
+      <div class="table-scroll">
+        <table class="templates">
+          <thead>
+            <tr>
+              {% set title_order = 'desc' if view.sort == 'title' and view.order == 'asc' else 'asc' %}
+              {% set updated_order = 'asc' if view.sort == 'updated' and view.order == 'desc' else 'desc' %}
+              <th aria-sort="{{ ('ascending' if view.order == 'asc' else 'descending') if view.sort == 'title' else 'none' }}">
+                <a href="{{ link(sort='title', order=title_order, page=1) }}">Template{% if view.sort == 'title' %} {{ '↑' if view.order == 'asc' else '↓' }}{% endif %}</a>
+              </th>
+              <th>Sponsor account</th>
+              <th>Signature mode</th>
+              <th>Status</th>
+              <th aria-sort="{{ ('ascending' if view.order == 'asc' else 'descending') if view.sort == 'updated' else 'none' }}">
+                <a href="{{ link(sort='updated', order=updated_order, page=1) }}">Updated{% if view.sort == 'updated' %} {{ '↑' if view.order == 'asc' else '↓' }}{% endif %}</a>
+              </th>
+              <th>Attribution</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td>
+                  <div class="cell-stack">
+                    <a class="open" href="/templates/{{ row.id }}">{{ row.title }}</a>
+                    <span class="cell-sub">{{ row.id }}</span>
+                  </div>
+                </td>
+                <td>
+                  {% if row.sponsor_name %}
+                    <div class="cell-stack"><span>{{ row.sponsor_name }}</span><span class="cell-sub">{{ row.sponsor_account_id or 'No account ID' }}</span></div>
+                  {% else %}
+                    <span class="unassigned">Unassigned</span>
+                  {% endif %}
+                </td>
+                <td>{% if row.countersigner is none %}<span class="unassigned">Unknown</span>{% else %}{{ mode_label(row.countersigner) }}{% endif %}</td>
+                <td><span class="chip tone-{{ row.status.tone }}"{% if row.error %} title="{{ row.error }}"{% endif %}>{{ row.status.label }}</span></td>
+                <td class="updated">{{ row.updated | when }}</td>
+                <td class="attribution">{{ row.attribution }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span>Showing {{ first }}–{{ last }} of {{ matching }}</span>
+        <div>
+          <a class="button button-small" href="{{ link(page=page - 1) }}" aria-label="Previous page of templates"{% if page <= 1 %} aria-disabled="true" tabindex="-1"{% endif %}>Previous</a>
+          <a class="button button-small" href="{{ link(page=page + 1) }}" aria-label="Next page of templates"{% if page >= pages_total %} aria-disabled="true" tabindex="-1"{% endif %}>Next</a>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+  <p class="small muted">Every template here was set up in this studio. The sponsor account is the one typed at setup; it is never inferred from a title or file name.</p>
+</main>
+{% endblock %}

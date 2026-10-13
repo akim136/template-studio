@@ -209,6 +209,23 @@ def _one_page(pdf, number: int, wanted: set[int] | None) -> PageCandidates:
         page.close()
 
 
+def page_candidates(source: bytes, number: int) -> PageCandidates:
+    """The candidates of one page (one-based), as `extract_candidates` reads them, without
+    opening the other pages."""
+    with _LOCK:
+        try:
+            pdf = pdfium.PdfDocument(source)
+        except Exception as error:
+            reason = f"PDFium could not open the document: {type(error).__name__}"
+            return PageCandidates(number, [], reason=reason)
+        try:
+            if not 0 < number <= len(pdf):
+                return PageCandidates(number, [], reason="none")
+            return _one_page(pdf, number, {number})
+        finally:
+            pdf.close()
+
+
 def extract_candidates(source: bytes, pages: list[int] | None = None) -> list[PageCandidates]:
     """Every page PDFium can open is measured; candidates are read only on `pages` (default:
     all). A page that fails carries its reason, and so does every requested page of a document

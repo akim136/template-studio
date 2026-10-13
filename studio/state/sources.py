@@ -7,15 +7,20 @@ cannot drift. Page sizes are the visible area as PDFium renders it, the frame fi
 A page's rotation is recorded only when pypdf and PDFium both read it and agree; otherwise it is
 unknown (None), and no field can be placed on that page; the page is flagged, without making the
 inventory incomplete.
+
+The editor shows each page as a PNG rendered from the sealed bytes the first time it is asked for
+and kept beside the source, so a page is rendered, and the source read, once.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict
 
+from studio.services import render
 from studio.services.analysis import (
     MAX_SOURCE_BYTES,
     AnalysisError,
@@ -24,10 +29,13 @@ from studio.services.analysis import (
     oversize_message,
 )
 from studio.services.candidates import extract_candidates
+from studio.state.errors import NotFound
 from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
 UNKNOWN_ROTATION = "the page's rotation could not be confirmed, so no field can be placed on it"
+VIEW_SCALE = 2.0  # 144 DPI: sharp in the editor up to 150% zoom on a standard screen
+MAX_VIEW_PIXELS = 8_000_000  # a larger page is shown at a lower scale
 
 
 class SourceError(ValueError):
@@ -105,3 +113,34 @@ def source_bytes(store: ObjectStore, sha256: str) -> bytes:
 
 def page_index(record: dict) -> dict[tuple[int, int], dict]:
     return {(page["document_index"], page["page"]): page for page in record["pages"]}
+
+
+def view_scale(width_pt: float, height_pt: float) -> float:
+    return min(VIEW_SCALE, math.sqrt(MAX_VIEW_PIXELS / (width_pt * height_pt)))
+
+
+def page_png(store: ObjectStore, sha256: str, page: int) -> bytes:
+    """One page (one-based) of a sealed source as a PNG for the editor. NotFound if the source is
+    not sealed or has no such page; ValueError if PDFium cannot render it."""
+    try:
+        record = load(store, sha256)
+    except SourceError:
+        raise NotFound(sha256) from None
+    measured = record and page_index(record).get((0, page))
+    if not measured:
+        raise NotFound(f"{sha256}/{page}")
+    key = f"sources/{sha256}/pages/{page:04d}.png"
+    stored = store.get(key)
+    if stored is not None:
+        return stored.data
+    width, height = measured["width"] or 612, measured["height"] or 792
+    source = source_bytes(store, sha256)
+    try:
+        data = render.render_png(source, page, view_scale(width, height))
+    except Exception as error:  # PDFium's own errors are not ValueErrors
+        raise ValueError(f"page {page}: {type(error).__name__}") from None
+    try:
+        store.put_new(key, data)
+    except PreconditionFailed:
+        pass  # another request rendered it first; this render is the same page
+    return data

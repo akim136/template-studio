@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Template Studio{% endblock %} · Template Studio</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/studio.css">
+  <script src="/static/studio.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Template Studio: all templates">
+      <img class="brand-mark" src="/static/homebase-mark.png" width="51" height="24" alt="">
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-name">Template Studio</span>
+    </a>
+    <span class="header-spacer"></span>
+    {% if viewer and viewer.local %}
+      <span class="local-badge" title="Local mode answers only this machine. Nobody signs in, and sign-offs are recorded as anonymous.">Local · no sign-in</span>
+    {% elif viewer %}
+      {% set display = viewer.name or viewer.email %}
+      <div class="account">
+        <button class="account-button" type="button" aria-haspopup="menu" aria-expanded="false" data-menu-button>
+          <span class="initials" aria-hidden="true">{{ (display[:1] ~ (display.split(' ')[1][:1] if ' ' in display else '')) | upper }}</span>
+          <span class="account-text"><span class="account-name">{{ display }}</span><span class="account-org">Signed in with Vercel</span></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6l6 -6"></path></svg>
+        </button>
+        <div class="account-menu" role="menu" hidden data-menu>
+          <p>{{ viewer.email }}</p>
+          <button class="menu-item" type="button" role="menuitem" data-sign-out>Sign out of the studio</button>
+        </div>
+      </div>
+    {% endif %}
+  </header>
+  {% block body %}{% endblock %}
+  <div class="toast" role="status" aria-live="polite" hidden data-toast></div>
+</body>
+</html>
