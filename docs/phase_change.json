@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "Drafting goes on after its page is left: any studio tab the signed-in person has open carries the drafts this browser drives, one tab per draft, and takes over if the driving tab closes. Script and style URLs carry a digest of the static files."
+  "summary": "Drafting goes on after its page is left: any studio tab the signed-in person has open carries the drafts this browser drives, one tab per draft, and takes over if the driving tab closes; a kept draft must match the server's ID formats. Script and style URLs carry a digest of the static files."
 }

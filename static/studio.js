@@ -161,11 +161,15 @@ window.studio = (() => {
   // draft saves its fields.
 
   const DRAFTING_PREFIX = "studio.drafting.";
-  const WORKERS = 4;
   const IDLE_MS = 3000;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const viewer = () => document.body.dataset.viewer; // undefined on a page with nobody to name
+  // The server's ID formats (studio/state/templates.py, drafts.py): a kept entry builds request paths.
+  const TEMPLATE_ID = /^[0-9a-f]{32}$/;
+  const DRAFT_ID = /^[0-9]{8}t[0-9]{6}-[0-9a-f]{8}$/;
+  const mine = (entry) => Boolean(entry && viewer() !== undefined && entry.viewer === viewer()
+    && TEMPLATE_ID.test(entry.template) && DRAFT_ID.test(entry.draft));
 
   function stored() {
     try {
@@ -184,20 +188,20 @@ window.studio = (() => {
     try { window.localStorage.removeItem(key); } catch { /* already gone */ }
   }
 
-  // This person's tracked drafts; anyone else's are dropped on the way.
+  // This person's tracked drafts; anyone else's, and anything malformed, are dropped on the way.
   function tracked() {
-    const who = viewer();
-    if (who === undefined) return [];
+    if (viewer() === undefined) return [];
     const entries = [];
     for (const key of stored()) {
       const entry = read(key);
-      if (entry && entry.viewer === who) entries.push(entry);
+      if (mine(entry)) entries.push(entry);
       else drop(key);
     }
     return entries;
   }
 
   const drafting = {
+    workers: 4, // model calls a draft keeps going at once, here and on its drafting page
     track(entry) {
       const who = viewer();
       if (who === undefined) return;
@@ -206,10 +210,7 @@ window.studio = (() => {
       } catch { /* not kept */ }
     },
     untrack(draftId) { drop(DRAFTING_PREFIX + draftId); },
-    isTracked(draftId) {
-      const entry = read(DRAFTING_PREFIX + draftId);
-      return Boolean(entry && viewer() !== undefined && entry.viewer === viewer());
-    },
+    isTracked(draftId) { return mine(read(DRAFTING_PREFIX + draftId)); },
     forget() { stored().forEach(drop); },
     // Runs `work(held)` holding this draft's lock if no other tab holds it, and answers what
     // `work` answers.
@@ -265,7 +266,7 @@ window.studio = (() => {
       }
       const open = view.pages.filter((p) => p.state === "pending" || p.state === "drafted").length;
       const before = progress(view);
-      const calls = view.preflight === "PASSED" ? Math.max(1, Math.min(WORKERS, open)) : 1;
+      const calls = view.preflight === "PASSED" ? Math.max(1, Math.min(drafting.workers, open)) : 1;
       await Promise.all(Array.from({ length: calls }, send));
       if (view.state === "RUNNING" && progress(view) === before) await sleep(IDLE_MS); // calls still out elsewhere
     }
@@ -284,7 +285,7 @@ window.studio = (() => {
       if (entry.template === here) continue;
       drafting.wait(entry.draft, async () => {
         const current = read(DRAFTING_PREFIX + entry.draft); // gone if it finished meanwhile
-        if (current && drafting.isTracked(entry.draft)) await carryOn(current);
+        if (mine(current)) await carryOn(current);
       });
     }
   }

@@ -10,7 +10,7 @@
   const id = root.dataset.template;
   let revision = Number(root.dataset.revision); // the template's current revision
   const base = `/api/templates/${id}/drafts`;
-  const WORKERS = 4;
+  const WORKERS = studio.drafting.workers;
   const POLL_MS = 5000;
 
   let view = null; // the draft as the server last showed it
