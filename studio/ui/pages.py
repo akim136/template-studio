@@ -31,6 +31,7 @@ from starlette.requests import cookie_parser
 from studio.services.fields import MERGE_NAMES
 from studio.state import identity, lifecycle, sources
 from studio.state.api import NOT_CONFIGURED, NOT_LOOPBACK, Services, _loopback
+from studio.state.drafts import DRAFT_ID
 from studio.state.errors import NotFound
 from studio.state.ledger import CAP_USD
 from studio.state.policy import ROLES
@@ -257,9 +258,10 @@ async def analyzing(request: Request, template_id: str, start: str = "") -> Resp
 
 
 @pages.get("/templates/{template_id}/edit", response_class=HTMLResponse)
-async def editor(request: Request, template_id: str) -> Response:
+async def editor(request: Request, template_id: str, drafted: str = "") -> Response:
     """The field editor. The page carries the saved revision and the source's page sizes; every
-    save, review, approval and create goes through the API."""
+    save, review, approval and create goes through the API. `drafted` names the draft the
+    drafting page just finished, so a draft that found no fields can say so here."""
     services, viewer, refusal = _viewer(request)
     if refusal is not None:
         return refusal
@@ -269,6 +271,9 @@ async def editor(request: Request, template_id: str) -> Response:
         snapshot = await run_in_threadpool(services.templates.get, template_id)
         source = await run_in_threadpool(sources.load, services.store, snapshot["source_sha256"])
         operation = await run_in_threadpool(_operation, services, template_id)
+        outcome = await run_in_threadpool(
+            _drafted, services, template_id, snapshot["revision"], drafted
+        )
     except NotFound:
         return _message(request, viewer, 404, "No such template", "Check the link.")
     except StorageError:
@@ -284,6 +289,7 @@ async def editor(request: Request, template_id: str) -> Response:
         "template": snapshot,
         "pages": source["pages"],
         "operation": operation,
+        "drafted": outcome,
         "roles": list(ROLES),
         "merge_names": list(MERGE_NAMES),
         "modes": MODES,
@@ -332,6 +338,22 @@ async def record(request: Request, template_id: str) -> Response:
         "required": required,
     }
     return _render(request, services, "record.html", context)
+
+
+def _drafted(services: Services, template_id: str, revision: int, hint: str) -> dict | None:
+    """What drafting left on the editor's revision: from the draft that saved it, or from the
+    draft the drafting page names when that draft found no fields to save."""
+    if services.drafts is None:
+        return None
+    head, _ = services.templates.head(template_id)
+    made = head.get("save_id") or ""
+    draft_id = made.removeprefix("draft-") if made.startswith("draft-") else hint
+    if head["revision"] != revision or not DRAFT_ID.fullmatch(draft_id):
+        return None
+    try:
+        return services.drafts.outcome(template_id, draft_id, revision)
+    except NotFound:
+        return None
 
 
 def _operation(services: Services, template_id: str) -> dict | None:

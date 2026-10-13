@@ -19,6 +19,8 @@
   let inFlight = 0;
   let busy = ""; // "starting" or "applying" while that request is out
   let loaded = false;
+  let watched = false; // this page saw the draft running, so it goes on to the editor when it ends
+  let leaving = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const usd = (value) => `$${Number(value).toFixed(value < 1 ? 4 : 2)}`;
@@ -66,6 +68,8 @@
     }
     if (view.state === "APPLIED") {
       stages[4] = { state: "done", detail: `Saved as revision ${view.applied.revision}` };
+    } else if (view.state === "DRAFTED" && !view.not_applied && watched) {
+      stages[4] = { state: "current", detail: "Saving the fields and opening the editor" };
     } else if (view.state !== "RUNNING") {
       stages[4] = { state: "current", detail: result ? `${plural(result.fields.length, "field")} ready to save` : "Reading the result" };
     }
@@ -146,13 +150,21 @@
     const stale = view && !current && view.state !== "APPLIED";
     $("[data-start]").hidden = !loaded || Boolean(view) || driving || busy !== "";
     $("[data-continue]").hidden = !(current && view.state === "RUNNING" && !driving);
+    const unsaved = Boolean(view && view.not_applied);
     const apply = $("[data-apply]");
-    apply.hidden = !(current && ["DRAFTED", "STOPPED"].includes(view.state) && result && result.fields.length);
+    apply.hidden = !(current && !unsaved && ["DRAFTED", "STOPPED"].includes(view.state) && result && result.fields.length);
     apply.disabled = busy !== "";
     apply.textContent = result ? `Save ${plural(result.fields.length, "field")} as revision ${revision + 1}` : "Save fields";
-    $("[data-restart]").hidden = !(view && !driving && busy === "" && (stale || view.state === "APPLIED" || (current && view.state === "STOPPED")));
+    $("[data-restart]").hidden = !(view && !driving && busy === "" && (stale || unsaved || view.state === "APPLIED" || (current && view.state === "STOPPED")));
     $("[data-open-record]").hidden = !(view && view.state === "APPLIED");
     if (stale) showError("This draft was started on an earlier revision", `The template is now at revision ${revision}, so this draft can no longer be saved. Start a new draft to draft the current revision.`);
+    else if (unsaved && result && result.fields.length) showError("The fields were not saved", view.not_applied);
+  }
+
+  // A finished draft goes straight to the editor: saved, or with nothing found to save.
+  function toEditor() {
+    leaving = true;
+    window.location.replace(`/templates/${id}/edit?drafted=${encodeURIComponent(view.id)}`);
   }
 
   function showError(title, text) {
@@ -183,8 +195,11 @@
     if (view && next.id === view.id && next.state === "RUNNING" && view.state === "RUNNING" && progress(next) < progress(view)) return;
     const moved = !view || next.id !== view.id || next.state !== view.state || progress(next) !== progress(view);
     view = next;
+    if (view.state === "RUNNING") watched = true;
     // Steps still out when a draft stops finish afterwards, so the result is read again as they do.
     if (view.state !== "RUNNING" && (moved || !result)) await readResult();
+    const nothingFound = view.state === "DRAFTED" && result && !result.fields.length;
+    if (watched && !leaving && (view.state === "APPLIED" || nothingFound)) toEditor();
     render();
   }
 
@@ -276,9 +291,9 @@
       return;
     }
     revision = answer.data.template.revision;
-    studio.toast(`Saved as revision ${revision}.`);
     result = answer.data.result;
-    await show(answer.data.draft);
+    view = answer.data.draft;
+    toEditor();
   }
 
   // ---- wiring ----
@@ -292,7 +307,7 @@
     start();
   });
   window.addEventListener("beforeunload", (event) => {
-    if (inFlight > 0 || busy !== "") event.preventDefault();
+    if (!leaving && (inFlight > 0 || busy !== "")) event.preventDefault();
   });
 
   (async () => {

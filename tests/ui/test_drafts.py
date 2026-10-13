@@ -203,6 +203,97 @@ def test_a_failed_check_leaves_its_page_out_and_never_uses_stage_a(book, templat
         book.apply(template["id"], draft["id"], "anonymous")
 
 
+def fails_checking(number):
+    """A gateway failure for the check of page `number` only."""
+
+    def fail(body):
+        checking = "changes" in body["response_format"]["json_schema"]["schema"]["properties"]
+        if checking and page_of(body) == number:
+            return gateway.GatewayError("HTTP 500 from the gateway (synthetic)")
+        return None
+
+    return fail
+
+
+def test_a_finished_draft_is_saved_without_a_click(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    running = book.view(template["id"], draft["id"])
+    assert book.finish(template["id"], draft["id"]) == running  # nothing to save yet
+    run_to_end(book, template, draft, fake())
+    view = book.finish(template["id"], draft["id"])
+    assert view["state"] == drafts.APPLIED and "not_applied" not in view
+    applied = {k: v for k, v in view["applied"].items() if k != "at"}
+    assert applied == {
+        "revision": 2,
+        "status": "COMPLETE",
+        "fields": 1,
+        "rejected": 0,
+        "unfinished": [],
+        "by": "anonymous",  # who started it
+        "automatic": True,
+    }
+    assert lifecycle.status(services.templates.summaries()[0]).label == "Needs review"
+    assert book.finish(template["id"], draft["id"])["applied"] == view["applied"]
+    assert services.templates.get(template["id"])["revision"] == 2  # finishing again saves nothing
+    outcome = book.outcome(template["id"], draft["id"], 2)
+    assert outcome == {
+        "revision": 2,
+        "status": "COMPLETE",
+        "fields": 1,
+        "rejected": 0,
+        "unfinished": [],
+    }
+    assert book.outcome(template["id"], draft["id"], 1) is None
+
+
+def test_a_finish_that_cannot_save_says_why_and_leaves_the_draft_drafted(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    services.templates.save(template["id"], 1, POLICY, [], "someone-else-saved")
+    view = book.finish(template["id"], draft["id"])
+    assert view["state"] == drafts.DRAFTED
+    assert "changed after this draft started" in view["not_applied"]
+    assert book.outcome(template["id"], draft["id"], 2) is None  # revision 2 is not the draft's
+
+
+def test_a_draft_that_found_no_fields_tells_the_editor(book, template):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake(fail_stage_b=True))
+    view = book.finish(template["id"], draft["id"])
+    assert view["state"] == drafts.DRAFTED and "no fields" in view["not_applied"]
+    assert book.outcome(template["id"], draft["id"], 1) == {
+        "revision": 1,
+        "status": "PARTIAL",
+        "fields": 0,
+        "rejected": 0,
+        "unfinished": [1],
+    }
+
+
+def test_a_partial_draft_is_saved_with_the_pages_it_could_not_check(book, services):
+    sealed = sources.seal(services.store, make_pdf([FORM, FORM]))
+    template = services.templates.create(sealed["sha256"], POLICY)
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake(fail=fails_checking(2)))
+    view = book.finish(template["id"], draft["id"])
+    assert view["state"] == drafts.APPLIED
+    assert view["applied"]["status"] == "PARTIAL" and view["applied"]["unfinished"] == [2]
+    assert book.outcome(template["id"], draft["id"], 2)["unfinished"] == [2]
+
+
+def test_an_earlier_apply_record_still_reads_as_an_outcome(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    book.apply(template["id"], draft["id"], "anonymous")
+    key = f"templates/{template['id']}/drafts/{draft['id']}/applied.json"
+    stored = services.store.get(key)
+    record = json.loads(stored.data)
+    for added in ("rejected", "unfinished", "automatic"):
+        del record[added]
+    services.store.replace(key, canonical(record), stored.etag)
+    assert book.outcome(template["id"], draft["id"], 2)["unfinished"] == []
+
+
 def test_a_draft_that_would_pass_the_cap_stops_before_sending(book, template, services):
     head = {"opening_usd": "2.276604", "settled_usd": "7.72", "open": {}, "runs": {}}
     services.store.put_new(HEAD, canonical(head))

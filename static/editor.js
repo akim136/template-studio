@@ -39,6 +39,7 @@
   let saved = data.template; // the server's current revision
   let fields = clone(saved.fields); // the working copy
   let operation = data.operation;
+  const drafted = data.drafted; // what drafting left on the revision it made, if it made this one
   let undo = [];
   let redo = [];
   let selected = null; // a field id
@@ -343,6 +344,18 @@
       el("strong", { text: title }), el("span", { text: body }), ...actions);
   }
 
+  // What drafting could not do: pages with no checked answer, fields that failed validation, or
+  // nothing found at all. A complete draft needs no notice.
+  function draftedNotice(d) {
+    const shown = d.unfinished.length > 8 ? `${d.unfinished.slice(0, 8).join(", ")} and ${d.unfinished.length - 8} more` : d.unfinished.join(", ");
+    const gaps = [];
+    if (d.unfinished.length) gaps.push(`${d.unfinished.length === 1 ? "Page" : "Pages"} ${shown} had no checked answer.`);
+    if (d.rejected) gaps.push(`${plural(d.rejected, "proposed field")} failed validation and ${d.rejected === 1 ? "was" : "were"} left out.`);
+    if (!d.fields) return ["Drafting found no fields.", [...gaps, "Add the fields by hand."].join(" ")];
+    if (d.status !== "COMPLETE") return ["Drafting was partial.", [...gaps, `Check ${d.unfinished.length === 1 ? "that page" : d.unfinished.length ? "those pages" : "every page"} by hand before review.`].join(" ")];
+    return null;
+  }
+
   function renderBanners() {
     const box = $("[data-banners]");
     const shown = [];
@@ -361,6 +374,8 @@
       shown.push(banner("yellow", `Revision ${saved.revision} is reviewed.`,
         `Saving makes revision ${saved.revision + 1}, which needs a new review.`));
     }
+    const notice = drafted && saved.revision === drafted.revision && draftedNotice(drafted);
+    if (notice) shown.push(banner("yellow", ...notice));
     const bad = invalid().length;
     if (bad) {
       shown.push(banner("yellow", `${plural(bad, "field")} cannot be saved yet.`, "Fix the fields marked with ! (see Issues), then save."));
@@ -928,6 +943,10 @@
   completion.addEventListener("close", () => { completionError = ""; render(); });
 
   window.addEventListener("resize", () => { if (zoom === "fit") renderCanvas(); });
+  if (new URLSearchParams(window.location.search).has("drafted")) { // arrived from drafting
+    window.history.replaceState(null, "", window.location.pathname);
+    if (drafted && drafted.fields) window.studio.toast(`Drafted ${plural(drafted.fields, "field")} as revision ${drafted.revision}. Correct and review ${drafted.fields === 1 ? "it" : "them"} here.`);
+  }
   window.addEventListener("beforeunload", (event) => {
     if (dirty() || saving || working) event.preventDefault();
   });

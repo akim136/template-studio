@@ -448,8 +448,9 @@ class Drafts:
             "unfinished": unfinished,
         }
 
-    def apply(self, template_id: str, draft_id: str, actor: str) -> dict:
-        """Save the drafted fields as a new revision of the revision the draft started from."""
+    def apply(self, template_id: str, draft_id: str, actor: str, automatic: bool = False) -> dict:
+        """Save the drafted fields as a new revision of the revision the draft started from.
+        `automatic` records that drafting saved them on finishing, not a click."""
         current = self.view(template_id, draft_id)
         if current["state"] == RUNNING:
             raise Conflict("the draft is still running", current)
@@ -471,8 +472,58 @@ class Drafts:
             "revision": saved["revision"],
             "status": outcome["status"],
             "fields": len(outcome["fields"]),
+            "rejected": len(outcome["rejected"]),
+            "unfinished": [item["page"] for item in outcome["unfinished"]],
             "at": self.clock().isoformat(),
             "by": actor,
+            "automatic": automatic,
         }
         self._write_once(self._prefix(template_id, draft_id) + "applied.json", record)
         return {"template": saved, "draft": self.view(template_id, draft_id), "result": outcome}
+
+    def finish(self, template_id: str, draft_id: str, current: dict | None = None) -> dict:
+        """Save a draft that has finished drafting as a revision, for whoever started it, so its
+        fields reach the editor without a click; return its view. One whose fields cannot be
+        saved (it found none, or the template moved on) stays drafted, and its view says why
+        under `not_applied`."""
+        current = current or self.view(template_id, draft_id)
+        if current["state"] != DRAFTED:
+            return current
+        actor = self._header(template_id, draft_id)["started_by"]
+        try:
+            return self.apply(template_id, draft_id, actor, automatic=True)["draft"]
+        except Conflict as moved:
+            return {**current, "not_applied": moved.reason}
+        except Invalid as refused:
+            return {**current, "not_applied": str(refused)}
+
+    def outcome(self, template_id: str, draft_id: str, revision: int) -> dict | None:
+        """What a finished draft left on `revision`, for the editor: the fields it saved there,
+        or, for a draft of that revision that found none to save, that it found none."""
+        header = self._header(template_id, draft_id)
+        applied = self._read(self._prefix(template_id, draft_id) + "applied.json")
+        if applied is not None:
+            if applied["revision"] != revision:
+                return None
+            return {
+                "revision": revision,
+                "status": applied["status"],
+                "fields": applied["fields"],
+                "rejected": applied.get("rejected", 0),  # not recorded by earlier studios
+                "unfinished": applied.get("unfinished", []),
+            }
+        if (
+            header["base_revision"] != revision
+            or self.view(template_id, draft_id)["state"] != DRAFTED
+        ):
+            return None
+        found = self.result(template_id, draft_id)
+        if found["fields"]:
+            return None  # fields not yet saved: the drafting page saves them
+        return {
+            "revision": revision,
+            "status": found["status"],
+            "fields": 0,
+            "rejected": len(found["rejected"]),
+            "unfinished": [item["page"] for item in found["unfinished"]],
+        }

@@ -575,8 +575,10 @@ def get_draft(template_id: str, draft_id: str, request: Request) -> dict:
 
 @router.post("/templates/{template_id}/drafts/{draft_id}/step")
 def step_draft(template_id: str, draft_id: str, request: Request) -> dict:
+    """One model call; the step that finishes the draft also saves its fields as a revision."""
     drafts = _drafts(request)
-    return _call(drafts.step, template_id, draft_id, _model_token(request))
+    current = _call(drafts.step, template_id, draft_id, _model_token(request))
+    return _call(drafts.finish, template_id, draft_id, current)
 
 
 @router.get("/templates/{template_id}/drafts/{draft_id}/result")
