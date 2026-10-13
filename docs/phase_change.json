@@ -1,1 +1,6 @@
-{"phase": "P3", "kind": "feature", "features": ["F-P3-core-ui"], "summary": "PR4 slices 4a, 4b and 4c: server-rendered library, setup, record, Analyzing and editor screens over the saved state, with real upload, typed sponsor details, in-app field drafting on the hosted studio (one model call per request, an R2 spend ledger under the $10 cap), field correction, save, review, approval and a simulated create. No login screen, model UI or fixture fields."}
+{
+  "phase": "P3",
+  "kind": "scope_update",
+  "features": [],
+  "summary": "Widen F-P3-core-ui to tests/test_repo_contract.py, so a feature PR can change the /healthz analysis label from NOT_IMPLEMENTED to DRAFTING_HOSTED with its contract test; AGENTS.md names the label rather than a value."
+}
