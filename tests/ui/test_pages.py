@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import app
 from studio.state import sources
 from studio.state.store import StorageError
+from studio.ui import pages
 from tests.state.helpers import POLICY, field, two_page_pdf
 from tests.state.test_hosted import EMAIL, SAME_ORIGIN, uploaded
 from tests.state.test_r2 import CREDENTIALS
@@ -184,6 +185,15 @@ def test_the_record_page_for_an_unknown_template_is_404(local, template_id):
 def test_static_files_are_served(local):
     for path in ("/static/studio.css", "/static/studio.js", "/static/setup.js"):
         assert local.get(path).status_code == 200, path
+
+
+def test_scripts_and_styles_are_named_by_this_deploys_version(local):
+    # a browser never pairs this deploy's pages with an earlier deploy's cached scripts
+    page = local.get("/new")
+    linked = re.findall(r'(?:src|href)="(/static/[a-z]+\.(?:js|css)[^"]*)"', page.text)
+    assert linked and all(url.endswith(f"?v={pages.ASSET_VERSION}") for url in linked)
+    assert re.fullmatch(r"[0-9a-f]{12}", pages.ASSET_VERSION)
+    assert local.get(linked[0]).status_code == 200
 
 
 def test_a_hosted_visitor_without_a_session_is_sent_to_sign_in(visitor):
