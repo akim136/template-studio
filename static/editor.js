@@ -243,6 +243,7 @@
 
   async function createTemplate() {
     working = "operation";
+    operationRequest += 1;
     completionError = "";
     renderCompletion();
     const started = Date.now();
@@ -280,14 +281,21 @@
   // Unresolved orphans refuse a create: the drawer's create button and the dialog's Try again.
   const orphaned = () => Boolean(operation && operation.orphans && operation.orphans.length);
 
+  // A create or status check makes any read already in flight stale: its answer is dropped, so it
+  // cannot replace the operation the create or check returned (codex-review, PR #20).
+  let operationRequest = 0;
+
   async function readOperation() {
+    const request = (operationRequest += 1);
     const answer = await api("GET", "/operation");
+    if (request !== operationRequest) return;
     if (answer.ok) operation = answer.data;
     else if (answer.status === 404) operation = null;
   }
 
   async function checkStatus() {
     working = "status";
+    operationRequest += 1;
     completionError = "";
     renderCompletion();
     const started = Date.now();
