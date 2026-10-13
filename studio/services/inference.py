@@ -98,6 +98,13 @@ class RunConfig:
         roles = ", ".join(f"{role} (index {index})" for index, role in enumerate(self.roles))
         return RULES.format(roles=roles, merges=", ".join(MERGE_NAMES))
 
+    def prompts_sha256(self) -> str:
+        """A hash of what the model is told: the preflight, and both stage prompts with their
+        business rules, as the runner builds them."""
+        rules = self.rules()
+        told = [PREFLIGHT_TEXT, STAGE_A.format(rules=rules), STAGE_B.format(rules=rules)]
+        return hashlib.sha256(json.dumps(told).encode()).hexdigest()
+
 
 @dataclass
 class PageEvidence:

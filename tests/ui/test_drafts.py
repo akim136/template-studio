@@ -375,6 +375,43 @@ def test_a_draft_started_before_its_configuration_was_recorded_stops(book, templ
     assert view["state"] == drafts.STOPPED and view["stop_reason"] == drafts.CHANGED
 
 
+def test_a_changed_configuration_stops_the_draft_before_reading_its_source(
+    book, template, monkeypatch
+):
+    draft = book.start(template["id"], 1, "anonymous")
+    monkeypatch.setattr(drafts, "ROUTE", gateway.Route("openai/gpt-4.1", "byok", True))
+
+    def unread(store, sha256):
+        raise AssertionError("the source was read")
+
+    monkeypatch.setattr(sources, "source_bytes", unread)
+    assert book.step(template["id"], draft["id"], "t", fake())["stop_reason"] == drafts.CHANGED
+
+
+def test_a_finished_draft_is_applied_after_a_later_change_since_its_calls_were_checked(
+    book, template, monkeypatch
+):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    monkeypatch.setattr(inference, "STAGE_B", inference.STAGE_B + " Now.")
+    assert book.apply(template["id"], draft["id"], "anonymous")["draft"]["state"] == drafts.APPLIED
+
+
+def test_a_finished_draft_without_a_recorded_configuration_is_not_applied(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    key = f"templates/{template['id']}/drafts/{draft['id']}/draft.json"
+    stored = services.store.get(key)
+    header = json.loads(stored.data)
+    del header["prompts_sha256"]
+    services.store.replace(key, canonical(header), stored.etag)
+    with pytest.raises(Invalid, match="start a new draft"):
+        book.apply(template["id"], draft["id"], "anonymous")
+    view = book.finish(template["id"], draft["id"])
+    assert view["state"] == drafts.DRAFTED and "start a new draft" in view["not_applied"]
+    assert services.templates.get(template["id"])["revision"] == 1
+
+
 def test_a_failed_route_check_stops_the_draft_even_if_its_stop_was_lost(book, template):
     draft = book.start(template["id"], 1, "anonymous")
     real_write_once = book._write_once
