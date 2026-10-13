@@ -342,6 +342,39 @@ def test_a_wrong_route_stops_the_draft(book, template):
     assert book.step(template["id"], draft["id"], "t", fake())["state"] == drafts.STOPPED
 
 
+def configuration_changes(monkeypatch):
+    other = gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True)
+    yield "route", lambda: monkeypatch.setattr(drafts, "ROUTE", other)
+    yield "rules", lambda: monkeypatch.setattr(inference, "RULES", inference.RULES + "\n- New.")
+    yield "prompt", lambda: monkeypatch.setattr(inference, "STAGE_B", inference.STAGE_B + " Now.")
+
+
+@pytest.mark.parametrize("change", ["route", "rules", "prompt"])
+def test_a_draft_stops_when_its_configuration_changes_after_it_started(
+    book, template, monkeypatch, change
+):
+    draft = book.start(template["id"], 1, "anonymous")
+    transport = fake()
+    assert book.step(template["id"], draft["id"], "t", transport)["state"] == drafts.RUNNING
+    sent = len(transport.chat_bodies())
+    dict(configuration_changes(monkeypatch))[change]()
+    view = book.step(template["id"], draft["id"], "t", transport)
+    assert view["state"] == drafts.STOPPED
+    assert view["stop_reason"] == drafts.CHANGED
+    assert len(transport.chat_bodies()) == sent  # nothing was sent on the changed configuration
+
+
+def test_a_draft_started_before_its_configuration_was_recorded_stops(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    key = f"templates/{template['id']}/drafts/{draft['id']}/draft.json"
+    stored = services.store.get(key)
+    header = json.loads(stored.data)
+    del header["prompts_sha256"]
+    services.store.replace(key, canonical(header), stored.etag)
+    view = book.step(template["id"], draft["id"], "t", fake())
+    assert view["state"] == drafts.STOPPED and view["stop_reason"] == drafts.CHANGED
+
+
 def test_a_failed_route_check_stops_the_draft_even_if_its_stop_was_lost(book, template):
     draft = book.start(template["id"], 1, "anonymous")
     real_write_once = book._write_once

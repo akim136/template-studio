@@ -15,6 +15,11 @@ unknown outcome: its reservation stays at the worst case in the ledger, and that
 drafted again in this draft. Stage A and stage B results are separate, immutable objects, and a
 page whose stage B failed has no final fields; stage A is never substituted for it.
 
+A draft records its route and a hash of what the model is told (both stage prompts with their
+business rules, and the preflight). A step that finds either changed since the start, as a deploy
+during a draft would, stops the draft before sending anything, so a draft's record always names
+the configuration its calls ran on.
+
 When every page is finished, or the draft has stopped (route, budget or preflight), the operator
 applies the stage B fields as one save on the revision the draft started from. The save records
 the pages left without a checked answer, which later revisions keep until a newer draft is
@@ -43,7 +48,7 @@ from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.ledger import CAP_USD, StoreLedger
 from studio.state.policy import parse_policy
-from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical
+from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical, digest
 from studio.state.templates import Templates
 
 ROUTE = gateway.Route("openai/gpt-5.4-mini", "byok", accept_fallback=True)  # Alex, Oct 12, 2026
@@ -56,6 +61,7 @@ START_WINDOW = timedelta(minutes=2)
 START_SLOTS = 5
 
 RUNNING, DRAFTED, STOPPED, APPLIED = "RUNNING", "DRAFTED", "STOPPED", "APPLIED"
+CHANGED = "the drafting configuration changed after this draft started; start a new draft"
 
 
 class Unavailable(Exception):
@@ -64,6 +70,25 @@ class Unavailable(Exception):
 
 def _mode(policy: dict) -> str:
     return "countersign" if policy["countersigner"] else "lp"
+
+
+def _route() -> dict:
+    return {
+        "model": ROUTE.model,
+        "credential": ROUTE.credential,
+        "accept_fallback": ROUTE.accept_fallback,
+    }
+
+
+def _prompts_sha256(config: inference.RunConfig) -> str:
+    """A hash of what the model is told: both stage prompts with their rules, and the preflight."""
+    rules = config.rules()
+    told = [
+        inference.STAGE_A.format(rules=rules),
+        inference.STAGE_B.format(rules=rules),
+        inference.PREFLIGHT_TEXT,
+    ]
+    return digest(told)
 
 
 def _page_record(raw: dict) -> PageRecord:
@@ -198,11 +223,10 @@ class Drafts:
             "policy": snapshot["policy"],
             "roles": policy.roles,
             "signer_mode": _mode(snapshot["policy"]),
-            "route": {
-                "model": ROUTE.model,
-                "credential": ROUTE.credential,
-                "accept_fallback": True,
-            },
+            "route": _route(),
+            "prompts_sha256": _prompts_sha256(
+                inference.RunConfig(ROUTE, policy.roles, _mode(snapshot["policy"]))
+            ),
             "profile": inference.PROFILE,
             "pages": [p.page for p in result.pages],
             "inventory": result.inventory,
@@ -325,6 +349,11 @@ class Drafts:
         names = set(self.store.children(prefix + "steps/"))
         source = sources.source_bytes(self.store, header["source_sha256"])
         config = inference.RunConfig(ROUTE, header["roles"], header["signer_mode"], workers=1)
+        if header["route"] != _route() or header.get("prompts_sha256") != _prompts_sha256(config):
+            self._write_once(
+                prefix + "stop.json", {"reason": CHANGED, "at": self.clock().isoformat()}
+            )
+            return self.view(template_id, draft_id)
         runner = inference.Runner(
             source,
             None,

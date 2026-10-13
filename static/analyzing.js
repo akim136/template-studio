@@ -104,6 +104,9 @@
     if (reason.startsWith("route violation")) {
       return ["Stopped: unexpected model route", `An answer came from a route other than the approved one, so nothing more was sent. ${reason}`];
     }
+    if (reason.startsWith("the drafting configuration changed")) {
+      return ["Stopped: drafting was updated", "The model route or its prompts changed after this draft started, so nothing more was sent. Start a new draft to draft on the new configuration."];
+    }
     if (reason.startsWith("preflight")) {
       return ["Stopped: the route check did not pass", `No page was sent. ${reason}`];
     }
