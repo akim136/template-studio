@@ -245,6 +245,10 @@ class Bound(_Body):
     binding: str
 
 
+class Review(Bound):
+    checked_pages: list[int] | None = None  # the pages drafting left unchecked, checked by hand
+
+
 class UploadRequest(_Body):
     sha256: str
     size: int
@@ -490,9 +494,9 @@ def save_template(template_id: str, body: Save, request: Request) -> dict:
 
 
 @router.post("/templates/{template_id}/review")
-def confirm_review(template_id: str, body: Bound, request: Request) -> dict:
+def confirm_review(template_id: str, body: Review, request: Request) -> dict:
     templates = _services(request).templates
-    args = (template_id, body.revision, body.binding, _by(request))
+    args = (template_id, body.revision, body.binding, _by(request), body.checked_pages or [])
     return _call(templates.confirm_review, *args)
 
 

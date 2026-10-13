@@ -577,5 +577,7 @@ dialog.drawer[open] { display: flex; }
 .drawer-foot .actions { justify-content: flex-end; }
 .drawer-foot p.help { margin: 0; }
 .check.confirm { align-items: flex-start; }
+.unchecked-pages { display: flex; flex-direction: column; gap: 6px; }
+.unchecked-pages[hidden] { display: none; }
 .check.confirm input { margin-top: 3px; }
 .check.confirm > span { display: flex; flex-direction: column; }

@@ -16,7 +16,9 @@ drafted again in this draft. Stage A and stage B results are separate, immutable
 page whose stage B failed has no final fields; stage A is never substituted for it.
 
 When every page is finished, or the draft has stopped (route, budget or preflight), the operator
-applies the stage B fields as one save on the revision the draft started from.
+applies the stage B fields as one save on the revision the draft started from. The save records
+the pages left without a checked answer, which later revisions keep until a newer draft is
+applied, and which a review must confirm as checked by hand (`studio.state.templates`).
 
 Drafting needs a model credential, which only the hosted studio has: the OIDC token Vercel sends
 with each request. It is used for the calls of that request and never logged or stored. The
@@ -464,6 +466,7 @@ class Drafts:
                 self._header(template_id, draft_id)["policy"],  # the policy it was drafted for
                 outcome["fields"],
                 f"draft-{draft_id}",
+                unchecked=[item["page"] for item in outcome["unfinished"]],
             )
         except Conflict as moved:
             reason = "the template changed after this draft started; start a new draft"

@@ -1,6 +1,8 @@
 {
   "phase": "P4",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Advance to P4 and add F-P4a-model-decision (stage 5) and F-P4b-release-evidence (stage 6), the features the head-to-head and the validation fixes declare."
+  "kind": "feature",
+  "features": [
+    "F-P4b-release-evidence"
+  ],
+  "summary": "Pages a partial AI draft left unchecked carry forward and block approval until the review confirms each as checked by hand; the review confirmation covers every page (validation F-03, F-05)."
 }

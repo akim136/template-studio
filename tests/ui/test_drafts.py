@@ -281,6 +281,36 @@ def test_a_partial_draft_is_saved_with_the_pages_it_could_not_check(book, servic
     assert book.outcome(template["id"], draft["id"], 2)["unfinished"] == [2]
 
 
+def test_pages_a_partial_draft_left_unchecked_block_approval_of_later_revisions(book, services):
+    sealed = sources.seal(services.store, make_pdf([FORM, FORM]))
+    template = services.templates.create(sealed["sha256"], POLICY)
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake(fail=fails_checking(2)))
+    applied = book.finish(template["id"], draft["id"])["applied"]
+    drafted = services.templates.get(template["id"])
+    assert drafted["unchecked"] == {"revision": applied["revision"], "pages": [2]}
+    nudged = [{**f, "x": f["x"] + 1} for f in drafted["fields"]]
+    edited, _ = services.templates.save(template["id"], 2, drafted["policy"], nudged)
+    assert edited["revision"] == 3 and edited["unchecked"] == {"revision": 2, "pages": [2]}
+    with pytest.raises(Invalid, match="page 2"):
+        services.templates.confirm_review(template["id"], 3, edited["binding"], "anonymous")
+    services.templates.confirm_review(template["id"], 3, edited["binding"], "anonymous", [2])
+    approved = services.templates.approve(template["id"], 3, edited["binding"], "anonymous")
+    assert approved["approval"] is not None
+
+
+def test_a_complete_draft_clears_pages_an_earlier_draft_left_unchecked(book, services):
+    sealed = sources.seal(services.store, make_pdf([FORM, FORM]))
+    template = services.templates.create(sealed["sha256"], POLICY)
+    first = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, first, fake(fail=fails_checking(2)))
+    book.finish(template["id"], first["id"])
+    second = book.start(template["id"], 2, "anonymous")
+    run_to_end(book, template, second, fake())
+    assert book.finish(template["id"], second["id"])["state"] == drafts.APPLIED
+    assert services.templates.get(template["id"])["unchecked"] is None
+
+
 def test_an_earlier_apply_record_still_reads_as_an_outcome(book, template, services):
     draft = book.start(template["id"], 1, "anonymous")
     run_to_end(book, template, draft, fake())

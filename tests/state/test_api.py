@@ -87,6 +87,24 @@ def test_a_stale_approval_sent_directly_to_the_api_is_refused(client, template):
     assert client.get(url).json()["approval"] is None
 
 
+def test_a_review_confirms_unchecked_pages_and_approval_names_any_left(client, services, template):
+    url = f"/api/templates/{template['id']}"
+    drafted, _ = services.templates.save(template["id"], 1, POLICY, [field()], unchecked=[2])
+    refused = client.post(f"{url}/review", json=bound(drafted))
+    assert refused.status_code == 422 and "page 2" in refused.json()["detail"]["errors"][0]
+    reviewed = client.post(f"{url}/review", json={**bound(drafted), "checked_pages": [2]})
+    assert reviewed.status_code == 200 and reviewed.json()["review"]["checked_pages"] == [2]
+    assert client.post(f"{url}/approval", json=bound(drafted)).json()["approval"] is not None
+
+
+def test_approval_takes_no_page_confirmations(client, services, template):
+    url = f"/api/templates/{template['id']}"
+    drafted, _ = services.templates.save(template["id"], 1, POLICY, [field()], unchecked=[2])
+    client.post(f"{url}/review", json={**bound(drafted), "checked_pages": [2]})
+    extra = client.post(f"{url}/approval", json={**bound(drafted), "checked_pages": [2]})
+    assert extra.status_code == 422
+
+
 def test_invalid_fields_answer_422_with_reasons(client, template):
     response = save(client, template["id"], 1, [field(page=7)])
     assert response.status_code == 422
