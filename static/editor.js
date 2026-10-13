@@ -714,7 +714,9 @@
     });
     const close = () => completion.close();
     const library = () => window.location.assign("/");
-    const retry = !dirty() && saved.approval && !saved.issues.length;
+    // like the drawer's create button; a request that just failed is not offered again
+    const retry = !dirty() && saved.approval && !saved.issues.length && !completionError
+      && !(operation && operation.orphans && operation.orphans.length);
     const actions = busy ? [] : {
       CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/")),
         button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
