@@ -477,7 +477,12 @@ class Drafts:
         if current["state"] == RUNNING:
             raise Conflict("the draft is still running", current)
         header = self._header(template_id, draft_id)
-        if current["state"] != APPLIED and "prompts_sha256" not in header:
+        head, _ = self.templates.head(template_id)
+        landed = (  # an earlier apply saved the revision, then lost its record
+            head.get("save_id") == f"draft-{draft_id}"
+            and head["revision"] == current["base_revision"] + 1
+        )
+        if current["state"] != APPLIED and "prompts_sha256" not in header and not landed:
             raise Invalid([UNRECORDED])  # its calls may have run on more than one configuration
         outcome = self.result(template_id, draft_id)
         if not outcome["fields"]:
