@@ -308,8 +308,9 @@ dialog .completion-lead { margin: 0; font-size: 14px; color: var(--ink); line-he
 .cp-mark {
   width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 11px;
   font-weight: 800; background: #fff; color: var(--gray-7); border: 1.5px solid var(--gray-4);
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease;
 }
-.cp-label { font-size: 13px; font-weight: 600; color: var(--gray-7); }
+.cp-label { font-size: 13px; font-weight: 600; color: var(--gray-7); transition: color .2s ease; }
 .cp-state { font-size: 12px; color: var(--gray-7); }
 .cp-steps [data-state="done"] .cp-mark { background: var(--green-8); color: #fff; border: none; }
 .cp-steps [data-state="active"] .cp-mark { background: var(--primary); color: #fff; border: none; }
@@ -318,6 +319,18 @@ dialog .completion-lead { margin: 0; font-size: 14px; color: var(--ink); line-he
 .cp-steps [data-state="done"] .cp-label, .cp-steps [data-state="active"] .cp-label { color: var(--ink); }
 .cp-steps [data-state="fail"] .cp-label { color: var(--red-9); }
 .cp-steps [data-state="unknown"] .cp-label { color: var(--amber); }
+/* Each step's mark changes in place: a step in progress pulses, a finished one pops in, and the
+   result and checks fade in after the last step (editor.js paces the steps). */
+.cp-steps [data-state="active"] .cp-mark { animation: cp-pulse 1s ease-in-out infinite; }
+.cp-steps [data-state="done"] .cp-mark { animation: cp-pop .3s ease-out; }
+.cp-result, .cp-verify { animation: cp-fade .25s ease-out; }
+@keyframes cp-pulse { 50% { opacity: .55; } }
+@keyframes cp-pop { 0% { transform: scale(.6); } 70% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes cp-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-mark, .cp-label { transition: none; }
+  .cp-steps .cp-mark, .cp-result, .cp-verify { animation: none; }
+}
 .cp-result { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
 .cp-result strong { font-size: 14px; }
 .cp-result.alert-green { background: var(--green-0); border-color: var(--green-2); color: var(--green-9); }

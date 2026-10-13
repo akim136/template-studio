@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "PR4 review round 3 fixes: a drafting page opened after a draft found no fields offers a new draft and the editor; the completion dialog shows a failed request with the operation read back for this revision, and offers Try again only when the drawer would; Open in signing provider goes to https://app.hellosign.com/."
+  "summary": "The completion dialog shows its steps one after another, as in the design, instead of flipping all three together when the simulated create answers."
 }

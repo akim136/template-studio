@@ -245,15 +245,36 @@
     working = "operation";
     completionError = "";
     renderCompletion();
+    const started = Date.now();
     const answer = await api("POST", "/operation", { revision: saved.revision, binding: saved.binding });
+    await pace(started);
     if (answer.ok) {
       operation = answer.data;
+      await verifying();
     } else {
       completionError = answer.reason;
       await readOperation();
     }
     working = "";
     render();
+  }
+
+  // The simulated create answers at once, so its steps are shown one after another, as in the
+  // design: the request's step for at least STEP_MS, then, if the template was created, the
+  // verify step for STEP_MS before every step is done. Reduced motion shows the answer at once.
+  const STEP_MS = { request: 1300, verify: 1200 };
+  const still = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function pace(started) {
+    if (!still()) await pause(Math.max(0, started + STEP_MS.request - Date.now()));
+  }
+
+  async function verifying() {
+    if (still() || !operation || operation.state !== "CREATED") return;
+    working = "verifying";
+    renderCompletion();
+    await pause(STEP_MS.verify);
   }
 
   // Unresolved orphans refuse a create: the drawer's create button and the dialog's Try again.
@@ -269,10 +290,16 @@
     working = "status";
     completionError = "";
     renderCompletion();
+    const started = Date.now();
     const answer = await api("POST", "/operation/status-check");
+    await pace(started);
+    if (answer.ok) {
+      operation = answer.data;
+      await verifying();
+    } else {
+      completionError = answer.reason;
+    }
     working = "";
-    if (answer.ok) operation = answer.data;
-    else completionError = answer.reason;
     render();
   }
 
@@ -635,6 +662,7 @@
   function completionPhase() {
     if (working === "operation") return "creating";
     if (working === "status") return "checking";
+    if (working === "verifying") return "verifying";
     if (completionError && !(operation && operation.revision === saved.revision)) return "refused";
     return operation ? operation.state : "refused";
   }
@@ -668,13 +696,23 @@
 
     const states = {
       creating: ["active", "pending", "pending"], checking: ["active", "pending", "pending"],
+      verifying: ["done", "active", "pending"],
       CREATING: ["active", "pending", "pending"], VERIFYING: ["done", "active", "pending"],
       CREATED: ["done", "done", "done"], FAILED: ["fail", "pending", "pending"],
       NEEDS_STATUS_CHECK: ["unknown", "pending", "pending"], refused: ["fail", "pending", "pending"],
     }[phase];
-    $("[data-cp-steps]").replaceChildren(...STEPS.map((label, i) => el("li", { "data-state": states[i] },
-      el("span", { class: "cp-mark", "aria-hidden": "true", text: MARKS[states[i]][0] }),
-      el("span", { class: "cp-label", text: label }), el("span", { class: "cp-state", text: MARKS[states[i]][1] }))));
+    // updated in place, so each step's mark changes with a transition (studio.css)
+    const steps = $("[data-cp-steps]");
+    if (steps.children.length !== STEPS.length) {
+      steps.replaceChildren(...STEPS.map((label) => el("li", {}, el("span", { class: "cp-mark", "aria-hidden": "true" }),
+        el("span", { class: "cp-label", text: label }), el("span", { class: "cp-state" }))));
+    }
+    Array.from(steps.children).forEach((step, i) => {
+      if (step.dataset.state === states[i]) return;
+      step.dataset.state = states[i];
+      step.querySelector(".cp-mark").textContent = MARKS[states[i]][0];
+      step.querySelector(".cp-state").textContent = MARKS[states[i]][1];
+    });
 
     const id = operation ? operation.id : "";
     const results = {
@@ -708,7 +746,7 @@
         el("span", { class: "small muted", text: "The read-back checks the recorded payload against the approved one. It is not a provider-side placement check: no provider is connected." }));
     }
 
-    const busy = phase === "creating" || phase === "checking";
+    const busy = phase === "creating" || phase === "checking" || phase === "verifying";
     $("[data-cp-working]").hidden = !busy;
     const button = (label, onclick, { primary = false, disabled = false, title = false, focus = false } = {}) => el("button", {
       type: "button", class: primary ? "button button-primary" : "button", text: label, disabled, title,
