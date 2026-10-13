@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "A responsive pass over the studio's pages at phone, tablet and desktop widths: no page scrolls sideways, the library's tabs wrap and its rows stack on a phone, and the editor is one column. Styles only."
+  "summary": "A shorter README: what the studio is and what works today, what it is built on, how to run and check it, and where the rules live (the guide and tests)."
 }
