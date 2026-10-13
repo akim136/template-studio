@@ -764,7 +764,7 @@
     // like the drawer's create button; a request that just failed is not offered again
     const retry = !dirty() && saved.approval && !saved.issues.length && !completionError && !orphaned();
     const actions = busy ? [] : {
-      CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/")),
+      CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/account/logIn")),
         button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
       CREATING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
       VERIFYING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
