@@ -628,10 +628,12 @@
     unknown: ["?", "Unknown"],
   };
 
+  // A refused request shows the operation as the server read it back, if that operation is for this
+  // revision; the reason is shown with it (renderCompletion).
   function completionPhase() {
     if (working === "operation") return "creating";
     if (working === "status") return "checking";
-    if (completionError && !(operation && OPEN.includes(operation.state))) return "refused";
+    if (completionError && !(operation && operation.revision === saved.revision)) return "refused";
     return operation ? operation.state : "refused";
   }
 
@@ -687,7 +689,8 @@
     if (results) {
       result.className = `cp-result alert alert-${results[0]}`;
       $("[data-cp-result-title]").textContent = results[1];
-      $("[data-cp-result-body]").textContent = results[2];
+      const failed = completionError && phase !== "refused" ? ` The last request did not go through: ${completionError}` : "";
+      $("[data-cp-result-body]").textContent = `${results[2]}${failed}`;
     }
 
     const verify = $("[data-cp-verify]");

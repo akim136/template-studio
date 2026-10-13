@@ -1,1 +1,8 @@
-{"phase": "P3", "kind": "feature", "features": ["F-P3-core-ui"], "summary": "PR4 slices 4a, 4b and 4c: server-rendered library, setup, record, Analyzing and editor screens over the saved state, with real upload, typed sponsor details, in-app field drafting on the hosted studio (one model call per request, an R2 spend ledger under the $10 cap), field correction, save, review, approval and a simulated create. No login screen, model UI or fixture fields."}
+{
+  "phase": "P3",
+  "kind": "feature",
+  "features": [
+    "F-P3-core-ui"
+  ],
+  "summary": "PR4 review round 3 fixes: a drafting page opened after a draft found no fields offers a new draft and the editor; the completion dialog shows a failed request with the operation read back for this revision."
+}
