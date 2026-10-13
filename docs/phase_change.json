@@ -1,6 +1,8 @@
 {
   "phase": "P3",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Widen F-P3-core-ui to tests/test_repo_contract.py, so a feature PR can change the /healthz analysis label from NOT_IMPLEMENTED to DRAFTING_HOSTED with its contract test; AGENTS.md names the label rather than a value."
+  "kind": "feature",
+  "features": [
+    "F-P3-core-ui"
+  ],
+  "summary": "/healthz reports analysis as DRAFTING_HOSTED instead of NOT_IMPLEMENTED: the hosted studio drafts fields and local mode does not. The contract test, README and guide say the same."
 }

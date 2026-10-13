@@ -27,7 +27,7 @@ def test_policy_declaration_and_app_agree() -> None:
     assert_phase_contract(policy, json.loads(read(policy["declaration"])))
     # The phase lives only in the policy, so a scope_update can advance it without app changes.
     assert not hasattr(app, "PHASE")
-    assert app.ANALYSIS_STATUS == "NOT_IMPLEMENTED"
+    assert app.ANALYSIS_STATUS == "DRAFTING_HOSTED"
 
 
 def test_contract_allows_a_scope_update_to_advance_the_phase() -> None:
@@ -41,7 +41,7 @@ def test_docs_state_truthful_status() -> None:
 
     for text in (guide, readme):
         assert "/healthz" in text
-        assert "NOT_IMPLEMENTED" in text
+        assert "DRAFTING_HOSTED" in text
     assert "NOT_APPLIED" in guide
     assert "BOOTSTRAP_REQUIRED" in guide
     assert "generic rules" in guide and "generic rules" in readme
