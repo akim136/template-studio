@@ -11,7 +11,7 @@
   <script src="{{ asset('studio.js') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if viewer %} data-viewer="{{ viewer.key }}"{% endif %}>
   <header class="app-header">
     <a class="brand" href="/" aria-label="Template Studio: all templates">
       <img class="brand-mark" src="/static/homebase-mark.png" width="51" height="24" alt="">

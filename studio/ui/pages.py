@@ -118,12 +118,13 @@ def _viewer(request: Request) -> tuple[Services | None, dict | None, Response | 
     if services.auth is None:
         if not _loopback(request.scope):
             return None, None, _message(request, None, 403, "Not available", NOT_LOOPBACK)
-        return services, {"local": True}, None
+        return services, {"local": True, "key": "local"}, None
     cookie = cookie_parser(request.headers.get("cookie", "")).get(identity.SESSION_COOKIE)
     actor = identity.session_actor(services.auth, cookie, services.clock())
     if actor is None:
         return None, None, RedirectResponse("/auth/login", 303)
-    return services, {"local": False, "name": actor.name, "email": actor.email}, None
+    key = hashlib.sha256(actor.email.encode()).hexdigest()[:16]  # names the person, not the email
+    return services, {"local": False, "name": actor.name, "email": actor.email, "key": key}, None
 
 
 def _render(

@@ -186,8 +186,7 @@
     else showError("The result could not be read", answer.reason);
   }
 
-  const RANK = { pending: 0, drafting: 1, drafted: 2, checking: 3, done: 4, lost: 4 };
-  const progress = (v) => v.pages.reduce((sum, p) => sum + RANK[p.state], v.preflight === "PASSED" ? 1 : 0);
+  const progress = (v) => studio.drafting.progress(v);
 
   // Answers to concurrent requests can arrive out of order; an older running view never replaces
   // a newer one.
@@ -254,11 +253,6 @@
     }
   }
 
-  // Another tab may already be driving this draft; then this page only follows it.
-  async function follow() {
-    while (driving && view.state === "RUNNING" && (await refresh()));
-  }
-
   async function drive() {
     if (driving || !view || view.state !== "RUNNING") return;
     driving = true;
@@ -266,11 +260,17 @@
     render();
     // Kept so that, if this page is left, any studio page in this browser carries the draft on.
     studio.drafting.track({ template: id, draft: view.id, title: root.dataset.title });
-    await studio.drafting.hold(view.id, async (held) => {
-      if (!held) return follow();
-      await routeCheck();
-      await Promise.all(Array.from({ length: WORKERS }, worker));
-    });
+    // Another tab may already be driving this draft; then this page follows it, and takes over if
+    // that tab closes before the draft ends.
+    while (driving && view.state === "RUNNING") {
+      const held = await studio.drafting.hold(view.id, async (held) => {
+        if (!held) return false;
+        await routeCheck();
+        await Promise.all(Array.from({ length: WORKERS }, worker));
+        return true;
+      });
+      if (held || !(await refresh())) break;
+    }
     driving = false;
     render();
   }

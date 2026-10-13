@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 
@@ -41,6 +42,7 @@ def test_without_saved_state_the_pages_say_so_and_show_no_sample(monkeypatch):
         page = client.get(path)
         assert page.status_code == 503 and "nothing can be saved" in page.text.lower()
         assert "sample" not in page.text.lower()
+        assert "data-viewer" not in page.text  # nobody to carry drafts on for
 
 
 def test_local_pages_refuse_another_machine(services, monkeypatch):
@@ -55,6 +57,7 @@ def test_an_empty_library_says_so(local):
     assert page.status_code == 200
     assert "No templates yet" in page.text and "0 templates" in page.text
     assert "Local · no sign-in" in page.text
+    assert '<body data-viewer="local">' in page.text
 
 
 def test_the_library_lists_saved_templates_newest_first_with_labels(local, services, clock):
@@ -205,6 +208,9 @@ def test_a_hosted_visitor_without_a_session_is_sent_to_sign_in(visitor):
 def test_a_signed_in_browser_sees_its_identity_and_r2_uploads(signed_in, bucket):
     page = signed_in.get("/")
     assert page.status_code == 200 and EMAIL in page.text and "Rae Reviewer" in page.text
+    # Drafts this browser carries on are kept per person, named by a digest rather than the email.
+    key = hashlib.sha256(EMAIL.encode()).hexdigest()[:16]
+    assert f'<body data-viewer="{key}">' in page.text
     assert f"https://{CREDENTIALS.host}" in page.headers["content-security-policy"]
     assert 'data-upload="direct"' in signed_in.get("/new").text
 
