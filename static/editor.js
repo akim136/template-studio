@@ -716,7 +716,7 @@
     const library = () => window.location.assign("/");
     const retry = !dirty() && saved.approval && !saved.issues.length;
     const actions = busy ? [] : {
-      CREATED: [button("Open in signing provider", null, { disabled: true, title: "Available once a signing provider is connected" }),
+      CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/")),
         button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
       CREATING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
       VERIFYING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
