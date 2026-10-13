@@ -163,7 +163,22 @@
         <button class="button" type="button" hidden data-pf-check>Check status</button>
         <button class="button button-primary" type="button" data-pf-approve>Approve and create</button>
       </div>
-      <p class="help">Approval binds this exact revision: its source, fields, policy and details. Creating is simulated: this studio has no signing-provider connection, so it records the template and sends nothing. Any later save needs a new review and approval.</p>
+      <p class="help">Approval binds this exact revision: its source, fields, policy and details. Creating is simulated: this studio has no signing-provider connection, so it records the template and sends nothing. The drawer closes and the create is walked through step by step. Any later save needs a new review and approval.</p>
+    </div>
+  </dialog>
+
+  <dialog class="completion" aria-labelledby="cp-title" data-completion>
+    <div class="completion-head"><h2 id="cp-title" data-cp-title>Create test template</h2></div>
+    <div class="completion-body">
+      <p class="completion-lead" data-cp-lead></p>
+      <span class="mono small muted" data-cp-operation></span>
+      <ol class="cp-steps" aria-label="Create progress" data-cp-steps></ol>
+      <div class="cp-result" role="status" hidden data-cp-result><strong data-cp-result-title></strong><span data-cp-result-body></span></div>
+      <div class="cp-verify" hidden data-cp-verify></div>
+    </div>
+    <div class="completion-foot">
+      <span class="small muted" hidden data-cp-working>Working. Closing is disabled until the operation reports a state.</span>
+      <div class="actions" data-cp-actions></div>
     </div>
   </dialog>
 

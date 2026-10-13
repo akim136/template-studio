@@ -46,6 +46,17 @@ def test_the_editor_carries_the_saved_revision_and_page_sizes(local, services):
     assert "amount" in data["merge_names"] and data["operation"] is None
 
 
+def test_the_editor_leads_back_to_the_record_and_has_the_completion_modal(local, services):
+    template = make(services)
+    page = local.get(f"/templates/{template['id']}/edit")
+    back = re.search(
+        r'<a class="button button-small" href="([^"]+)" aria-label="([^"]+)" data-leave>', page.text
+    )
+    assert back and back.groups() == (f"/templates/{template['id']}", "Back to the record")
+    assert '<dialog class="completion" aria-labelledby="cp-title" data-completion>' in page.text
+    assert 'aria-label="Create progress"' in page.text
+
+
 def test_typed_values_cannot_close_the_data_block(local, services):
     page = local.get(f"/templates/{make(services)['id']}/edit")
     assert "<Subscription>" not in page.text  # escaped in the title and in the JSON block

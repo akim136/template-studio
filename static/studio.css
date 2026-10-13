@@ -296,6 +296,46 @@ dialog h2 { margin: 0 0 8px; font-size: 17px; }
 dialog p { margin: 0 0 16px; font-size: 13px; color: var(--gray-7); }
 dialog .actions { justify-content: flex-end; }
 
+/* Completion modal (the design's "Create and verify"): a create, step by step */
+dialog.completion { width: 540px; padding: 0; display: none; flex-direction: column; max-height: calc(100vh - 32px); }
+dialog.completion[open] { display: flex; }
+.completion-head { padding: 16px 20px; border-bottom: 1px solid var(--gray-3); }
+.completion-head h2 { margin: 0; }
+.completion-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+dialog .completion-lead { margin: 0; font-size: 14px; color: var(--ink); line-height: 1.5; }
+.cp-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cp-steps li { display: flex; gap: 10px; align-items: center; }
+.cp-mark {
+  width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 11px;
+  font-weight: 800; background: #fff; color: var(--gray-7); border: 1.5px solid var(--gray-4);
+}
+.cp-label { font-size: 13px; font-weight: 600; color: var(--gray-7); }
+.cp-state { font-size: 12px; color: var(--gray-7); }
+.cp-steps [data-state="done"] .cp-mark { background: var(--green-8); color: #fff; border: none; }
+.cp-steps [data-state="active"] .cp-mark { background: var(--primary); color: #fff; border: none; }
+.cp-steps [data-state="fail"] .cp-mark { background: var(--red-8); color: #fff; border: none; }
+.cp-steps [data-state="unknown"] .cp-mark { background: var(--yellow-6); color: var(--ink); border: none; }
+.cp-steps [data-state="done"] .cp-label, .cp-steps [data-state="active"] .cp-label { color: var(--ink); }
+.cp-steps [data-state="fail"] .cp-label { color: var(--red-9); }
+.cp-steps [data-state="unknown"] .cp-label { color: var(--amber); }
+.cp-result { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
+.cp-result strong { font-size: 14px; }
+.cp-result.alert-green { background: var(--green-0); border-color: var(--green-2); color: var(--green-9); }
+.cp-verify { display: flex; flex-direction: column; gap: 8px; }
+.cp-check { border: 1px solid var(--gray-3); border-radius: 8px; padding: 10px 12px; display: flex; gap: 10px; }
+.cp-check > span:last-child { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--gray-7); min-width: 0; overflow-wrap: anywhere; }
+.cp-check strong { font-size: 13px; color: var(--ink); }
+.cp-tick {
+  width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--green-8); color: #fff;
+  display: grid; place-items: center; font-size: 11px; font-weight: 800;
+}
+.completion-foot {
+  padding: 14px 20px; border-top: 1px solid var(--gray-3); display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap;
+}
+.completion-foot [data-cp-working] { margin-right: auto; }
+.completion-foot .actions { margin-left: auto; justify-content: flex-end; }
+
 /* Toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 90;

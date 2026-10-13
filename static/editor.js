@@ -53,6 +53,7 @@
   let conflict = null; // the server's current revision after a refused save
   let working = ""; // a review, approval, create or status check in flight
   let signOffError = "";
+  let completionError = ""; // a create or status check the server refused
 
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   const round = (value) => Math.round(value * 100) / 100;
@@ -241,16 +242,16 @@
 
   async function createTemplate() {
     working = "operation";
-    signOffError = "";
-    renderPreflight();
+    completionError = "";
+    renderCompletion();
     const answer = await api("POST", "/operation", { revision: saved.revision, binding: saved.binding });
-    working = "";
     if (answer.ok) {
       operation = answer.data;
     } else {
-      signOffError = answer.reason;
+      completionError = answer.reason;
       await readOperation();
     }
+    working = "";
     render();
   }
 
@@ -262,18 +263,26 @@
 
   async function checkStatus() {
     working = "status";
-    signOffError = "";
-    renderPreflight();
+    completionError = "";
+    renderCompletion();
     const answer = await api("POST", "/operation/status-check");
     working = "";
     if (answer.ok) operation = answer.data;
-    else signOffError = answer.reason;
+    else completionError = answer.reason;
     render();
+  }
+
+  // The drawer approves (if needed) in place; the create, and any status check, then continue in
+  // the completion modal, which shows each step as the server reports it.
+  function toCompletion(action) {
+    $("[data-preflight]").close();
+    completion.showModal();
+    return action();
   }
 
   async function approveAndCreate() {
     if (!saved.approval && !(await signOff("approval"))) return;
-    if (saved.approval) await createTemplate();
+    if (saved.approval) await toCompletion(createTemplate);
   }
 
   // ---- drawing ----
@@ -304,6 +313,7 @@
     renderCanvas();
     renderInspector();
     if ($("[data-preflight]").open) renderPreflight();
+    if ($("[data-completion]").open) renderCompletion();
   }
 
   function renderBar() {
@@ -595,6 +605,112 @@
     box.replaceChildren(...lines);
   }
 
+  // The steps of a create as the server reports them. A create is one call, so while it is in flight
+  // only its first step is in progress; the others follow from the operation it returns.
+  const STEPS = ["Create test template", "Verify existence and counts", "Created"];
+  const MARKS = {
+    done: ["✓", "Done"], active: ["…", "In progress"], pending: ["", "Pending"], fail: ["!", "Failed"],
+    unknown: ["?", "Unknown"],
+  };
+
+  function completionPhase() {
+    if (working === "operation") return "creating";
+    if (working === "status") return "checking";
+    if (completionError && !(operation && OPEN.includes(operation.state))) return "refused";
+    return operation ? operation.state : "refused";
+  }
+
+  function fieldCounts(list) {
+    const counts = { client: 0, countersigner: 0, merge: 0 };
+    for (const f of list) {
+      if (f.signer === "sender") counts.merge += 1;
+      else if (f.signer === 1) counts.countersigner += 1;
+      else counts.client += 1;
+    }
+    return counts;
+  }
+
+  function renderCompletion() {
+    const phase = completionPhase();
+    const revision = operation && phase !== "creating" ? operation.revision : saved.revision;
+    const current = revision === saved.revision;
+    const counts = fieldCounts(saved.fields);
+    const parts = [`${counts.client} Client`];
+    if (saved.policy.countersigner) parts.push(`${counts.countersigner} CounterSigner`);
+    parts.push(`${counts.merge} Homebase prefill`);
+    const sponsor = saved.details.sponsor_name || "an unassigned sponsor";
+    const account = saved.details.sponsor_account_id ? ` (${saved.details.sponsor_account_id})` : "";
+    $("[data-cp-title]").textContent = phase === "CREATED" ? "Template created"
+      : phase === "NEEDS_STATUS_CHECK" ? "Creation status unknown" : "Create test template";
+    $("[data-cp-lead]").textContent = current
+      ? `Creates a test template for ${sponsor}${account} from approved revision ${revision}, with ${plural(saved.fields.length, "field")}: ${parts.join(", ")}.`
+      : `This operation is for revision ${revision}; the editor holds revision ${saved.revision}.`;
+    $("[data-cp-operation]").textContent = operation && phase !== "creating" ? `Operation ${operation.id}` : "";
+
+    const states = {
+      creating: ["active", "pending", "pending"], checking: ["active", "pending", "pending"],
+      CREATING: ["active", "pending", "pending"], VERIFYING: ["done", "active", "pending"],
+      CREATED: ["done", "done", "done"], FAILED: ["fail", "pending", "pending"],
+      NEEDS_STATUS_CHECK: ["unknown", "pending", "pending"], refused: ["fail", "pending", "pending"],
+    }[phase];
+    $("[data-cp-steps]").replaceChildren(...STEPS.map((label, i) => el("li", { "data-state": states[i] },
+      el("span", { class: "cp-mark", "aria-hidden": "true", text: MARKS[states[i]][0] }),
+      el("span", { class: "cp-label", text: label }), el("span", { class: "cp-state", text: MARKS[states[i]][1] }))));
+
+    const id = operation ? operation.id : "";
+    const results = {
+      checking: ["blue", "Checking operation status", `Checking operation ${id}.`],
+      CREATING: ["blue", "Not settled yet", "The create was recorded but has not reported back. Check its status before anything else."],
+      VERIFYING: ["blue", "Not verified yet", "The create was reported but not yet read back. Check its status."],
+      CREATED: ["green", "Created and verified", `${operation && operation.external_id} was read back, and it holds the payload approved for revision ${revision}. Simulated: recorded in the studio's storage; no provider was called.`],
+      NEEDS_STATUS_CHECK: ["yellow", "Creation status unknown", `The create may have completed. Check operation ${id} before creating again; a repeat create is refused.${operation && operation.note ? ` ${operation.note}.` : ""}`],
+      FAILED: ["red", "Create failed", (operation && operation.note) || "Nothing was created."],
+      refused: ["red", "Create refused", completionError || "The studio did not create the template."],
+    }[phase];
+    const result = $("[data-cp-result]");
+    result.hidden = !results;
+    if (results) {
+      result.className = `cp-result alert alert-${results[0]}`;
+      $("[data-cp-result-title]").textContent = results[1];
+      $("[data-cp-result-body]").textContent = results[2];
+    }
+
+    const verify = $("[data-cp-verify]");
+    verify.hidden = !(phase === "CREATED" && current);
+    if (!verify.hidden) {
+      const reviewer = saved.review ? saved.review.by : "the reviewer";
+      const approver = saved.approval ? `, and ${saved.approval.by} approved it` : "";
+      const check = (title, body) => el("div", { class: "cp-check" }, el("span", { class: "cp-tick", "aria-hidden": "true", text: "✓" }),
+        el("span", {}, el("strong", { text: title }), el("span", { text: body })));
+      verify.replaceChildren(
+        check("Existence and counts verified", `${operation.external_id} holds ${plural(saved.fields.length, "field")}: ${parts.join(", ")}.`),
+        check(`Placement reviewed by ${reviewer}`, `${reviewer} confirmed reviewing every field of revision ${revision}${approver}.`),
+        el("span", { class: "small muted", text: "The read-back checks the recorded payload against the approved one. It is not a provider-side placement check: no provider is connected." }));
+    }
+
+    const busy = phase === "creating" || phase === "checking";
+    $("[data-cp-working]").hidden = !busy;
+    const button = (label, onclick, { primary = false, disabled = false, title = false, focus = false } = {}) => el("button", {
+      type: "button", class: primary ? "button button-primary" : "button", text: label, disabled, title,
+      "data-autofocus": focus, onclick,
+    });
+    const close = () => completion.close();
+    const library = () => window.location.assign("/");
+    const retry = !dirty() && saved.approval && !saved.issues.length;
+    const actions = busy ? [] : {
+      CREATED: [button("Open in signing provider", null, { disabled: true, title: "Available once a signing provider is connected" }),
+        button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
+      CREATING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
+      VERIFYING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
+      NEEDS_STATUS_CHECK: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
+      FAILED: [button("Close", close, { focus: true }), ...(retry ? [button("Try again", createTemplate, { primary: true })] : [])],
+      refused: [button("Close", close, { focus: true })],
+    }[phase];
+    $("[data-cp-actions]").replaceChildren(...actions);
+    const focus = $("[data-cp-actions] [data-autofocus]");
+    if (focus && !$("[data-cp-actions]").contains(document.activeElement)) focus.focus();
+  }
+
   // ---- pointer, keyboard and controls ----
 
   function drag(event, fieldId, mode) {
@@ -690,7 +806,7 @@
   const typing = (target) => target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
 
   document.addEventListener("keydown", (event) => {
-    if ($("[data-preflight]").open || $("[data-discard-dialog]").open) return;
+    if ($("[data-preflight]").open || $("[data-discard-dialog]").open || $("[data-completion]").open) return;
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -794,6 +910,7 @@
   });
 
   const preflight = $("[data-preflight]");
+  const completion = $("[data-completion]");
   $("[data-open-preflight]").addEventListener("click", async () => {
     signOffError = "";
     renderPreflight();
@@ -806,7 +923,9 @@
     if (event.target.checked) signOff("review");
   });
   $("[data-pf-approve]").addEventListener("click", approveAndCreate);
-  $("[data-pf-check]").addEventListener("click", checkStatus);
+  $("[data-pf-check]").addEventListener("click", () => toCompletion(checkStatus));
+  completion.addEventListener("cancel", (event) => { if (working) event.preventDefault(); });
+  completion.addEventListener("close", () => { completionError = ""; render(); });
 
   window.addEventListener("resize", () => { if (zoom === "fit") renderCanvas(); });
   window.addEventListener("beforeunload", (event) => {
