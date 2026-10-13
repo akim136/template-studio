@@ -256,6 +256,9 @@
     render();
   }
 
+  // Unresolved orphans refuse a create: the drawer's create button and the dialog's Try again.
+  const orphaned = () => Boolean(operation && operation.orphans && operation.orphans.length);
+
   async function readOperation() {
     const answer = await api("GET", "/operation");
     if (answer.ok) operation = answer.data;
@@ -593,8 +596,7 @@
     approve.hidden = Boolean(open);
     approve.textContent = working === "approval" ? "Approving…" : working === "operation" ? "Creating…"
       : createdHere ? "Created" : saved.approval ? "Create test template" : "Approve and create";
-    approve.disabled = unsaved || Boolean(working) || saved.issues.length > 0 || !saved.review || createdHere
-      || Boolean(operation && operation.orphans && operation.orphans.length);
+    approve.disabled = unsaved || Boolean(working) || saved.issues.length > 0 || !saved.review || createdHere || orphaned();
     approve.title = !saved.review ? "Confirm the review first" : "";
     const check = $("[data-pf-check]");
     check.hidden = !open;
@@ -715,8 +717,7 @@
     const close = () => completion.close();
     const library = () => window.location.assign("/");
     // like the drawer's create button; a request that just failed is not offered again
-    const retry = !dirty() && saved.approval && !saved.issues.length && !completionError
-      && !(operation && operation.orphans && operation.orphans.length);
+    const retry = !dirty() && saved.approval && !saved.issues.length && !completionError && !orphaned();
     const actions = busy ? [] : {
       CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/")),
         button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
