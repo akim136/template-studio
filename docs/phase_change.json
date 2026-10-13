@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "PR4 review round 3 fixes: a drafting page opened after a draft found no fields offers a new draft and the editor; the completion dialog shows a failed request with the operation read back for this revision, and offers Try again only when the drawer would; Open in signing provider goes to https://app.hellosign.com/."
+  "summary": "Drafting goes on after its page is left: any studio tab the signed-in person has open carries the drafts this browser drives, one tab per draft, and takes over if the driving tab closes; a kept draft must match the server's ID formats. Script and style URLs carry a digest of the static files."
 }

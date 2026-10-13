@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from app import app
 from studio.state import sources
 from studio.state.store import StorageError
+from studio.ui import pages
 from tests.state.helpers import POLICY, field, two_page_pdf
 from tests.state.test_hosted import EMAIL, SAME_ORIGIN, uploaded
 from tests.state.test_r2 import CREDENTIALS
@@ -40,6 +42,7 @@ def test_without_saved_state_the_pages_say_so_and_show_no_sample(monkeypatch):
         page = client.get(path)
         assert page.status_code == 503 and "nothing can be saved" in page.text.lower()
         assert "sample" not in page.text.lower()
+        assert "data-viewer" not in page.text  # nobody to carry drafts on for
 
 
 def test_local_pages_refuse_another_machine(services, monkeypatch):
@@ -54,6 +57,7 @@ def test_an_empty_library_says_so(local):
     assert page.status_code == 200
     assert "No templates yet" in page.text and "0 templates" in page.text
     assert "Local · no sign-in" in page.text
+    assert '<body data-viewer="local">' in page.text
 
 
 def test_the_library_lists_saved_templates_newest_first_with_labels(local, services, clock):
@@ -186,6 +190,15 @@ def test_static_files_are_served(local):
         assert local.get(path).status_code == 200, path
 
 
+def test_scripts_and_styles_are_named_by_this_deploys_version(local):
+    # a browser never pairs this deploy's pages with an earlier deploy's cached scripts
+    page = local.get("/new")
+    linked = re.findall(r'(?:src|href)="(/static/[a-z]+\.(?:js|css)[^"]*)"', page.text)
+    assert linked and all(url.endswith(f"?v={pages.ASSET_VERSION}") for url in linked)
+    assert re.fullmatch(r"[0-9a-f]{12}", pages.ASSET_VERSION)
+    assert local.get(linked[0]).status_code == 200
+
+
 def test_a_hosted_visitor_without_a_session_is_sent_to_sign_in(visitor):
     for path in ("/", "/new", "/templates/" + "a" * 32):
         answer = visitor.get(path, follow_redirects=False)
@@ -195,6 +208,9 @@ def test_a_hosted_visitor_without_a_session_is_sent_to_sign_in(visitor):
 def test_a_signed_in_browser_sees_its_identity_and_r2_uploads(signed_in, bucket):
     page = signed_in.get("/")
     assert page.status_code == 200 and EMAIL in page.text and "Rae Reviewer" in page.text
+    # Drafts this browser carries on are kept per person, named by a digest rather than the email.
+    key = hashlib.sha256(EMAIL.encode()).hexdigest()[:16]
+    assert f'<body data-viewer="{key}">' in page.text
     assert f"https://{CREDENTIALS.host}" in page.headers["content-security-policy"]
     assert 'data-upload="direct"' in signed_in.get("/new").text
 
