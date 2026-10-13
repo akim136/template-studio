@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "The completion dialog shows its steps one after another, as in the design, instead of flipping all three together when the simulated create answers."
+  "summary": "Guide cleanup before the repository is shared: account, bucket and host identifiers are replaced by their roles. No code changes."
 }
