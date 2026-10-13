@@ -18,7 +18,8 @@ page whose stage B failed has no final fields; stage A is never substituted for 
 A draft records its route and a hash of what the model is told (both stage prompts with their
 business rules, and the preflight). A step that finds either changed since the start, as a deploy
 during a draft would, stops the draft before sending anything, so a draft's record always names
-the configuration its calls ran on.
+the configuration its calls ran on. A finished draft is applied even if the configuration changed
+since, because each of its calls was checked; one started before the hash was recorded is not.
 
 When every page is finished, or the draft has stopped (route, budget or preflight), the operator
 applies the stage B fields as one save on the revision the draft started from. The save records
@@ -48,7 +49,7 @@ from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.ledger import CAP_USD, StoreLedger
 from studio.state.policy import parse_policy
-from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical, digest
+from studio.state.store import ObjectStore, PreconditionFailed, StorageError, canonical
 from studio.state.templates import Templates
 
 ROUTE = gateway.Route("openai/gpt-5.4-mini", "byok", accept_fallback=True)  # Alex, Oct 12, 2026
@@ -62,6 +63,7 @@ START_SLOTS = 5
 
 RUNNING, DRAFTED, STOPPED, APPLIED = "RUNNING", "DRAFTED", "STOPPED", "APPLIED"
 CHANGED = "the drafting configuration changed after this draft started; start a new draft"
+UNRECORDED = "this draft started before the studio recorded its configuration; start a new draft"
 
 
 class Unavailable(Exception):
@@ -78,17 +80,6 @@ def _route() -> dict:
         "credential": ROUTE.credential,
         "accept_fallback": ROUTE.accept_fallback,
     }
-
-
-def _prompts_sha256(config: inference.RunConfig) -> str:
-    """A hash of what the model is told: both stage prompts with their rules, and the preflight."""
-    rules = config.rules()
-    told = [
-        inference.STAGE_A.format(rules=rules),
-        inference.STAGE_B.format(rules=rules),
-        inference.PREFLIGHT_TEXT,
-    ]
-    return digest(told)
 
 
 def _page_record(raw: dict) -> PageRecord:
@@ -224,9 +215,9 @@ class Drafts:
             "roles": policy.roles,
             "signer_mode": _mode(snapshot["policy"]),
             "route": _route(),
-            "prompts_sha256": _prompts_sha256(
-                inference.RunConfig(ROUTE, policy.roles, _mode(snapshot["policy"]))
-            ),
+            "prompts_sha256": inference.RunConfig(
+                ROUTE, policy.roles, _mode(snapshot["policy"])
+            ).prompts_sha256(),
             "profile": inference.PROFILE,
             "pages": [p.page for p in result.pages],
             "inventory": result.inventory,
@@ -346,14 +337,14 @@ class Drafts:
         if current["state"] != RUNNING:
             return current
         prefix = self._prefix(template_id, draft_id)
-        names = set(self.store.children(prefix + "steps/"))
-        source = sources.source_bytes(self.store, header["source_sha256"])
         config = inference.RunConfig(ROUTE, header["roles"], header["signer_mode"], workers=1)
-        if header["route"] != _route() or header.get("prompts_sha256") != _prompts_sha256(config):
+        if header["route"] != _route() or header.get("prompts_sha256") != config.prompts_sha256():
             self._write_once(
                 prefix + "stop.json", {"reason": CHANGED, "at": self.clock().isoformat()}
             )
             return self.view(template_id, draft_id)
+        names = set(self.store.children(prefix + "steps/"))
+        source = sources.source_bytes(self.store, header["source_sha256"])
         runner = inference.Runner(
             source,
             None,
@@ -485,6 +476,9 @@ class Drafts:
         current = self.view(template_id, draft_id)
         if current["state"] == RUNNING:
             raise Conflict("the draft is still running", current)
+        header = self._header(template_id, draft_id)
+        if current["state"] != APPLIED and "prompts_sha256" not in header:
+            raise Invalid([UNRECORDED])  # its calls may have run on more than one configuration
         outcome = self.result(template_id, draft_id)
         if not outcome["fields"]:
             raise Invalid(["the draft has no fields to apply"])
@@ -492,7 +486,7 @@ class Drafts:
             saved, _ = self.templates.save(
                 template_id,
                 current["base_revision"],
-                self._header(template_id, draft_id)["policy"],  # the policy it was drafted for
+                header["policy"],  # the policy it was drafted for
                 outcome["fields"],
                 f"draft-{draft_id}",
                 unchecked=[item["page"] for item in outcome["unfinished"]],
