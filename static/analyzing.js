@@ -69,7 +69,10 @@
     if (view.state === "APPLIED") {
       stages[4] = { state: "done", detail: `Saved as revision ${view.applied.revision}` };
     } else if (view.state === "DRAFTED" && !view.not_applied && watched) {
+      // a page following another tab can read the draft between its last step and the save
       stages[4] = { state: "current", detail: "Saving the fields and opening the editor" };
+    } else if (view.state === "DRAFTED" && result && !result.fields.length) {
+      stages[4] = { state: "current", detail: "No fields found: add them by hand in the editor" };
     } else if (view.state !== "RUNNING") {
       stages[4] = { state: "current", detail: result ? `${plural(result.fields.length, "field")} ready to save` : "Reading the result" };
     }
@@ -155,8 +158,12 @@
     apply.hidden = !(current && !unsaved && ["DRAFTED", "STOPPED"].includes(view.state) && result && result.fields.length);
     apply.disabled = busy !== "";
     apply.textContent = result ? `Save ${plural(result.fields.length, "field")} as revision ${revision + 1}` : "Save fields";
-    $("[data-restart]").hidden = !(view && !driving && busy === "" && (stale || unsaved || view.state === "APPLIED" || (current && view.state === "STOPPED")));
-    $("[data-open-record]").hidden = !(view && view.state === "APPLIED");
+    // A draft that found nothing, opened after it ended, still offers the editor and a new draft.
+    const nothingFound = Boolean(current && view.state === "DRAFTED" && result && !result.fields.length);
+    $("[data-restart]").hidden = !(view && !driving && busy === "" && (stale || unsaved || nothingFound || view.state === "APPLIED" || (current && view.state === "STOPPED")));
+    const editor = $("[data-open-record]");
+    editor.hidden = !(view && (view.state === "APPLIED" || nothingFound));
+    editor.href = nothingFound ? `/templates/${id}/edit?drafted=${encodeURIComponent(view.id)}` : `/templates/${id}/edit`;
     if (stale) showError("This draft was started on an earlier revision", `The template is now at revision ${revision}, so this draft can no longer be saved. Start a new draft to draft the current revision.`);
     else if (unsaved && result && result.fields.length) showError("The fields were not saved", view.not_applied);
   }
