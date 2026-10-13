@@ -14,7 +14,7 @@
   const ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
   const MODE_NOTES = {
     lp: "LP signature only: sponsor fields are left out. Those pages stay in the document.",
-    countersign: "Role indices identify recipients. They do not set the signing order.",
+    countersign: "The investor and the sponsor signer both sign. This does not set the signing order.",
   };
   const TONES = {
     hashing: "blue", requesting: "blue", uploading: "blue", verifying: "blue",
@@ -224,11 +224,28 @@
     if (!busy) actions.append(button(state.phase === "ready" ? "Replace file" : "Choose another PDF", pick));
   }
 
+  const requirement = (r) => `${r.signer ? "CounterSigner" : "Client"} ${r.type.replace("_", " ")}`;
+
+  // A mode starts with its signatures required and nothing else; switching modes starts over.
+  function applyDefaults() {
+    const countersigner = mode() === "countersign";
+    root.querySelectorAll("[data-required]").forEach((box) => {
+      box.checked = box.dataset.type === "signature" && (countersigner || box.dataset.signer === "0");
+    });
+  }
+
   function renderPolicy() {
     const countersigner = mode() === "countersign";
     root.querySelectorAll("[data-countersigner-only]").forEach((label) => {
       label.hidden = !countersigner;
     });
+    const required = policy().required;
+    $("[data-required-summary]").replaceChildren(...(required.length ? required : [null]).map((r) => {
+      const item = document.createElement("li");
+      item.className = r ? "chip tone-blue" : "chip tone-gray";
+      item.textContent = r ? requirement(r) : "Nothing: review is not blocked by required fields";
+      return item;
+    }));
     $("[data-mode-note]").textContent = MODE_NOTES[mode()];
     $("[data-title]").placeholder = defaultTitle() || "Defaults from the account and file name";
   }
@@ -245,9 +262,9 @@
     fact(summary, "Document", state.file ? state.file.name : "None yet");
     fact(summary, "Pages", state.source ? String(state.source.pages.length) : "–");
     fact(summary, "Policy", current.countersigner ? "LP + sponsor countersignature" : "LP signature only");
-    fact(summary, "Roles", current.countersigner ? "Client · 0, CounterSigner · 1" : "Client · 0");
+    fact(summary, "Roles", current.countersigner ? "Client, CounterSigner" : "Client");
     fact(summary, "Required", current.required.length
-      ? current.required.map((r) => `${r.signer ? "CounterSigner" : "Client"} ${r.type.replace("_", " ")}`).join(", ")
+      ? current.required.map(requirement).join(", ")
       : "Nothing");
     const reasons = blockers();
     const list = $("[data-blockers]");
@@ -325,7 +342,11 @@
     if (file) choose(file);
   });
   root.addEventListener("input", render);
-  root.addEventListener("change", (event) => { if (event.target !== input) render(); });
+  root.addEventListener("change", (event) => {
+    if (event.target === input) return;
+    if (event.target.matches("[data-mode]")) applyDefaults();
+    render();
+  });
   $("[data-create]").addEventListener("click", create);
 
   const dialog = $("[data-discard-dialog]");

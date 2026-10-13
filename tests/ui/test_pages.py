@@ -155,6 +155,17 @@ def test_the_setup_page_uploads_through_the_studio_locally(local):
     assert "sample" not in page.text.lower() and "model" not in page.text.lower()
 
 
+def test_setup_requires_only_the_signatures_by_default(local):
+    page = local.get("/new")
+    boxes = re.findall(
+        r'<input type="checkbox"( checked)? data-required data-signer="(\d)" data-type="(\w+)">',
+        page.text,
+    )
+    checked = {(signer, kind) for on, signer, kind in boxes if on}
+    assert len(boxes) == 5 and checked == {("0", "signature"), ("1", "signature")}
+    assert "Client · 0" not in page.text and "CounterSigner · 1" not in page.text
+
+
 def test_the_record_page_shows_saved_state(local, services, clock):
     created = make(services, clock, "Fund II - Subscription")
     page = local.get(f"/templates/{created['id']}")

@@ -667,7 +667,8 @@
       type: "button", role: "radio", class: "recipient", "aria-checked": String(adding.signer === value), disabled,
       title: disabled ? "This policy has no CounterSigner" : false,
       onclick: () => { adding = { ...adding, signer: value }; renderAddMenu(); },
-    }, el("span", { class: `tag ${roleClass(value)}`, text: tag(value) }), ` ${name}`)));
+    }, el("span", { class: `tag ${roleClass(value)}`, text: tag(value) }), el("span", { text: name }),
+    disabled ? el("span", { class: "hint", text: "Not in this policy" }) : "")));
     const merge = adding.signer === "sender";
     $("[data-add-merge-row]").hidden = !merge;
     const select = $("[data-add-merge]");

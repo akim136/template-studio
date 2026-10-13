@@ -232,8 +232,13 @@ table.templates { width: 100%; min-width: 1000px; border-collapse: collapse; fon
 .choice strong { display: block; }
 .choice span { display: block; font-size: 13px; color: var(--gray-7); margin-top: 2px; }
 .choice .roles { font-family: var(--mono); font-size: 12px; margin-top: 8px; color: var(--gray-8); }
+.requirements { display: flex; flex-direction: column; gap: 8px; }
+.requirements .label { margin: 0; }
+.requirements .help { margin: 0; }
+.requirement-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.more-requirements summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--primary); width: fit-content; }
+.more-requirements[open] summary { margin-bottom: 10px; }
 .required-list { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0; padding: 0; border: 0; }
-.required-list legend { padding: 0; margin-bottom: 8px; }
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
 .check input { accent-color: var(--primary); }
 .summary h2 { margin: 0 0 12px; font-size: 15px; }
@@ -367,16 +372,17 @@ dialog .actions { justify-content: flex-end; }
 .tool-divider { width: 1px; height: 20px; background: var(--gray-3); flex: none; }
 .add-field { position: relative; flex: none; }
 .popover {
-  position: absolute; left: 0; top: 100%; margin-top: 6px; z-index: 30; width: 372px; max-width: calc(100vw - 32px);
+  position: absolute; left: 0; top: 100%; margin-top: 6px; z-index: 30; width: 320px; max-width: calc(100vw - 32px);
   background: #fff; border: 1px solid var(--gray-3); border-radius: 8px; box-shadow: var(--shadow-md);
   padding: 12px; display: flex; flex-direction: column; gap: 10px;
 }
 .popover .label { margin: 0; font-size: 12px; }
-.recipients { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.recipients { display: flex; flex-direction: column; gap: 4px; }
 .recipient {
-  display: flex; align-items: center; gap: 5px; padding: 6px 7px; border-radius: 6px; cursor: pointer;
-  text-align: left; min-width: 0; border: 1px solid var(--gray-3); background: #fff; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  text-align: left; min-width: 0; border: 1px solid var(--gray-3); background: #fff; font-size: 13px; font-weight: 600;
 }
+.recipient .hint { margin-left: auto; font-size: 12px; font-weight: 500; color: var(--gray-7); }
 .recipient[aria-checked="true"] { border: 1.5px solid var(--primary); background: rgba(15, 110, 255, .04); }
 .type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .type-grid .button { justify-content: flex-start; }

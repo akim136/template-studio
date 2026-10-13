@@ -72,21 +72,28 @@
           <div class="choices" role="radiogroup" aria-label="Signature policy">
             <label class="choice">
               <input type="radio" name="mode" value="lp" data-mode>
-              <span><strong>LP signature only</strong><span>The investor signs as Client. Designated sponsor acceptance blocks are skipped on purpose.</span><span class="roles">Client · 0</span></span>
+              <span><strong>LP signature only</strong><span>The investor signs as Client. Designated sponsor acceptance blocks are skipped on purpose.</span><span class="roles">Client</span></span>
             </label>
             <label class="choice">
               <input type="radio" name="mode" value="countersign" checked data-mode>
-              <span><strong>LP + sponsor countersignature</strong><span>The investor signs as Client and an authorized sponsor signer countersigns as CounterSigner.</span><span class="roles">Client · 0 &nbsp; CounterSigner · 1</span></span>
+              <span><strong>LP + sponsor countersignature</strong><span>The investor signs as Client and an authorized sponsor signer countersigns as CounterSigner.</span><span class="roles">Client · CounterSigner</span></span>
             </label>
           </div>
           <p class="help" data-mode-note></p>
-          <fieldset class="required-list">
-            <legend class="label">Required by this case's policy</legend>
-            {% for signer, kind, label in [(0, 'signature', 'Client signature'), (0, 'initials', 'Client initials'), (0, 'date_signed', 'Client date signed'), (1, 'signature', 'CounterSigner signature'), (1, 'date_signed', 'CounterSigner date signed')] %}
-              <label class="check"{% if signer == 1 %} data-countersigner-only{% endif %}><input type="checkbox" checked data-required data-signer="{{ signer }}" data-type="{{ kind }}"> {{ label }}</label>
-            {% endfor %}
-          </fieldset>
-          <p class="help">Review and approval stay blocked until the fields meet every requirement checked here. There is no universal rule; uncheck what this case does not need.</p>
+          <div class="requirements">
+            <span class="label" id="required-title">Required before review</span>
+            <ul class="requirement-chips" aria-labelledby="required-title" data-required-summary></ul>
+            <p class="help">Review and approval stay blocked until the fields include each of these. Each mode starts with its signatures only; there is no universal rule.</p>
+            <details class="more-requirements">
+              <summary>Change what this case requires</summary>
+              <fieldset class="required-list">
+                <legend class="visually-hidden">Required by this case's policy</legend>
+                {% for signer, kind, label in [(0, 'signature', 'Client signature'), (0, 'initials', 'Client initials'), (0, 'date_signed', 'Client date signed'), (1, 'signature', 'CounterSigner signature'), (1, 'date_signed', 'CounterSigner date signed')] %}
+                  <label class="check"{% if signer == 1 %} data-countersigner-only{% endif %}><input type="checkbox"{% if kind == 'signature' %} checked{% endif %} data-required data-signer="{{ signer }}" data-type="{{ kind }}"> {{ label }}</label>
+                {% endfor %}
+              </fieldset>
+            </details>
+          </div>
           <div>
             <label class="label" for="title">Template title</label>
             <input class="input" id="title" maxlength="200" autocomplete="off" placeholder="Defaults from the account and file name" data-title>
