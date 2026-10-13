@@ -1,7 +1,8 @@
 """Homebase Template Studio entrypoint.
 
 The liveness route reports what is actually implemented, so no reviewer or client infers an
-analysis capability that is absent. The active phase lives in docs/phase_scope.json, not here.
+analysis capability that is absent: fields are drafted on the hosted studio only (see
+studio/state/drafts.py). The active phase lives in docs/phase_scope.json, not here.
 
 The state routes under /api answer 503 unless saved state is configured: a local directory outside
 the repository (STUDIO_STATE_DIR), or, on Vercel, R2 with Sign in with Vercel. /healthz reports
@@ -21,7 +22,7 @@ from studio.state.api import StateGate, auth_router, configure, report
 from studio.state.api import router as state_router
 from studio.ui.pages import ROOT, pages
 
-ANALYSIS_STATUS = "NOT_IMPLEMENTED"
+ANALYSIS_STATUS = "DRAFTING_HOSTED"
 
 app = FastAPI(
     title="Homebase Template Studio",
