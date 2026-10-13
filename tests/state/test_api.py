@@ -167,6 +167,21 @@ def test_a_storage_failure_on_a_read_says_to_reload(client, template, services, 
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert detail.startswith("storage failed; reload and try again") and "saved" not in detail
+    assert "head.json" not in detail and "Input/output" not in detail
+
+
+def test_a_storage_failure_keeps_its_internals_in_the_server_log(
+    client, template, services, monkeypatch, capsys
+):
+    def failing(key, data, etag):
+        raise StorageError("cannot write templates/x/head.json: R2 answered 500")
+
+    monkeypatch.setattr(services.store, "replace", failing)
+    response = save(client, template["id"], 1, [field()])
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "may or may not have been saved" in detail and "R2 answered" not in detail
+    assert "cannot write templates/x/head.json: R2 answered 500" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

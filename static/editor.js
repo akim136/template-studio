@@ -50,7 +50,7 @@
   let adding = { signer: 0, name: "" };
   let saving = false;
   let pending = null; // {content, base, id}: a save that may be retried with the same save_id
-  let failure = null; // why the last save failed
+  let failure = null; // {title, body}: why the last save failed
   let conflict = null; // the server's current revision after a refused save
   let working = ""; // a review, approval, create or status check in flight
   let signOffError = "";
@@ -217,8 +217,13 @@
     } else if (answer.status === 409 && answer.data && answer.data.detail && answer.data.detail.current) {
       conflict = answer.data.detail.current;
       pending = null;
+    } else if (answer.status === 0 || answer.status >= 500) {
+      // The save may have landed. A retry sends the same save_id, which returns a landed save
+      // instead of making another, so Retry is the one safe instruction: reloading would drop a
+      // change that did not land.
+      failure = { title: "Your change may not have been saved.", body: "Retry to save it. If the first save went through, Retry keeps that revision and saves nothing twice." };
     } else {
-      failure = answer.reason;
+      failure = { title: "Save failed.", body: answer.reason };
     }
     render();
   }
@@ -416,7 +421,7 @@
         `This template is now revision ${conflict.revision}. Your changes are not saved, and the studio does not save over a newer revision.`,
         el("button", { class: "button button-small", type: "button", text: `Discard mine and load revision ${conflict.revision}`, onclick: () => { adopt(conflict); render(); } })));
     } else if (failure) {
-      shown.push(banner("red", "Save failed.", failure,
+      shown.push(banner("red", failure.title, failure.body,
         el("button", { class: "button button-small", type: "button", text: "Retry", onclick: save })));
     }
     if (dirty() && saved.approval) {
