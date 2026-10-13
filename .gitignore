@@ -34,3 +34,6 @@ __pycache__/
 .ruff_cache/
 .codex-review/
 .DS_Store
+
+# The solution brief's check output: screenshots, its PDF and report.json
+/solution-brief/qa/
