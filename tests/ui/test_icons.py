@@ -22,3 +22,11 @@ def test_the_icons_are_served(local):
 
 def test_the_icon_needs_no_session(visitor):
     assert visitor.get("/favicon.ico", follow_redirects=False).status_code == 200
+
+
+def test_the_header_shows_the_homebase_mark(local):
+    page = local.get("/")
+    assert '<img class="brand-mark" src="/static/homebase-mark.png"' in page.text
+    assert 'aria-hidden="true">T</span>' not in page.text
+    mark = local.get("/static/homebase-mark.png")
+    assert mark.status_code == 200 and mark.content.startswith(PNG)

@@ -119,6 +119,15 @@ def test_unknown_filter_values_fall_back(local, services, clock):
     assert titles(local.get("/?tab=bogus&mode=bogus&sort=bogus&order=sideways")) == ["Only one"]
 
 
+def test_every_library_view_carries_the_region_a_view_change_swaps(local):
+    # studio.js fetches the next view and swaps this one region, so each answer must hold it once.
+    for query in ("", "?tab=drafts", "?q=nothing&sort=title&order=asc&page=2"):
+        page = local.get(f"/{query}")
+        assert page.status_code == 200
+        assert page.text.count("data-library") == 1
+        assert '<main class="page page-library" data-library>' in page.text
+
+
 def test_a_library_that_cannot_be_read_says_so(local, services, monkeypatch):
     def broken(prefix):
         raise StorageError("synthetic")

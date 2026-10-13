@@ -53,10 +53,7 @@ a:hover { text-decoration: underline; }
 }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--ink); }
 .brand:hover { text-decoration: none; }
-.brand-mark {
-  width: 28px; height: 28px; border-radius: 8px; background: var(--primary); color: #fff;
-  display: grid; place-items: center; font-weight: 700; font-size: 14px;
-}
+.brand-mark { display: block; width: 51px; height: 24px; flex: none; }
 .brand-divider { width: 1px; height: 20px; background: var(--gray-3); }
 .brand-name { font-size: 15px; font-weight: 600; }
 .header-spacer { flex: 1; }
@@ -141,6 +138,7 @@ a.button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
 
 /* Library */
 .filters { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+[data-library][aria-busy="true"] .table-card { opacity: .6; transition: opacity .15s; }
 .filters .grow { flex: 1; }
 .tabs {
   display: flex; gap: 2px; padding: 3px; background: var(--gray-1); border-radius: 8px;

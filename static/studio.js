@@ -1,4 +1,4 @@
-// Shared page behaviour: the account menu, signing out, filter auto-submit, and the toast.
+// Shared page behaviour: the account menu, signing out, the library's filters, and the toast.
 "use strict";
 
 window.studio = (() => {
@@ -73,14 +73,85 @@ window.studio = (() => {
   }
 
   function setUpFilters() {
-    document.querySelectorAll("[data-autosubmit]").forEach((select) => {
-      select.addEventListener("change", () => select.form.requestSubmit());
+    document.addEventListener("change", (event) => {
+      if (event.target.matches("[data-autosubmit]")) event.target.form.requestSubmit();
     });
+  }
+
+  // The control to focus again once the library is swapped: the same search box, select, column,
+  // or pager button, and for a tab, the tab now selected.
+  function focusKey(node) {
+    if (!node || !node.closest("[data-library]")) return null;
+    if (node.matches(".tab")) return '.tab[aria-current="page"]';
+    if (node.name) return `[name="${node.name}"]`;
+    if (node.getAttribute("aria-label")) return `[aria-label="${node.getAttribute("aria-label")}"]`;
+    const header = node.closest("th");
+    if (header) return `th:nth-child(${header.cellIndex + 1}) a`;
+    return null;
+  }
+
+  // The library swaps its results in place: a tab, sort, page or search fetches the same page and
+  // replaces the main region, so the screen never goes blank between views. Anything unexpected
+  // (an error, a sign-in redirect, a different page) falls back to a normal load.
+  function setUpLibrary() {
+    if (!document.querySelector("[data-library]")) return;
+    let latest = 0;
+
+    async function show(url, push) {
+      const ticket = ++latest;
+      const main = document.querySelector("[data-library]");
+      const key = focusKey(document.activeElement);
+      const busy = setTimeout(() => main.setAttribute("aria-busy", "true"), 150);
+      let next = null;
+      let title = document.title;
+      try {
+        const response = await fetch(url, { headers: { accept: "text/html" } });
+        if (response.ok && !response.redirected) {
+          const page = new DOMParser().parseFromString(await response.text(), "text/html");
+          next = page.querySelector("[data-library]");
+          title = page.title;
+        }
+      } catch { /* loaded normally below */ }
+      clearTimeout(busy);
+      if (ticket !== latest) return;
+      if (!next) {
+        window.location.assign(url);
+        return;
+      }
+      if (push) window.history.pushState(null, "", url);
+      main.replaceWith(document.adoptNode(next));
+      document.title = title;
+      const target = key && next.querySelector(key);
+      if (target && target.getAttribute("aria-disabled") !== "true") target.focus();
+    }
+
+    document.addEventListener("click", (event) => {
+      const link = event.target.closest("[data-library] a[href]");
+      if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const url = new URL(link.href);
+      if (url.origin !== window.location.origin || url.pathname !== window.location.pathname) return;
+      event.preventDefault();
+      if (link.matches(".tab")) {
+        link.closest(".tabs").querySelectorAll(".tab").forEach((tab) => tab.removeAttribute("aria-current"));
+        link.setAttribute("aria-current", "page");
+      }
+      show(url.href, true);
+    });
+    document.addEventListener("submit", (event) => {
+      const form = event.target.closest("[data-library] form[data-filters]");
+      if (!form) return;
+      event.preventDefault();
+      const url = new URL(form.action);
+      url.search = new URLSearchParams(new FormData(form)).toString();
+      show(url.href, true);
+    });
+    window.addEventListener("popstate", () => show(window.location.href, false));
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     setUpMenu();
     setUpFilters();
+    setUpLibrary();
   });
 
   return { api, reason, toast };
