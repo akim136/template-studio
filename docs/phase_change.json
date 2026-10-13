@@ -1,8 +1,6 @@
 {
   "phase": "P3",
-  "kind": "feature",
-  "features": [
-    "F-P3-core-ui"
-  ],
-  "summary": "Guide cleanup before the repository is shared: account, bucket and host identifiers are replaced by their roles. No code changes."
+  "kind": "scope_update",
+  "features": [],
+  "summary": "Adds the feature F-P3-solution-brief, which covers the static solution brief under solution-brief/, its check tool, a .gitignore line, a README pointer and its test."
 }
