@@ -2,9 +2,9 @@
 {% set details = template.details %}
 {% set title = details.title or 'Untitled' %}
 {% block title %}Analyzing {{ title }}{% endblock %}
-{% block head %}{% if not viewer.local %}<script src="/static/analyzing.js" defer></script>{% endif %}{% endblock %}
+{% block head %}{% if not viewer.local %}<script src="{{ asset('analyzing.js') }}" defer></script>{% endif %}{% endblock %}
 {% block body %}
-<main class="page page-analyzing" data-analyzing data-template="{{ template.id }}" data-revision="{{ template.revision }}" data-cap="{{ cap }}" data-autostart="{{ 'yes' if autostart else 'no' }}"{% if source %} data-pages="{{ source.pages | length }}"{% endif %} data-sha="{{ template.source_sha256[:12] }}…{{ template.source_sha256[-4:] }}">
+<main class="page page-analyzing" data-analyzing data-template="{{ template.id }}" data-title="{{ title }}" data-revision="{{ template.revision }}" data-cap="{{ cap }}" data-autostart="{{ 'yes' if autostart else 'no' }}"{% if source %} data-pages="{{ source.pages | length }}"{% endif %} data-sha="{{ template.source_sha256[:12] }}…{{ template.source_sha256[-4:] }}">
   <nav class="breadcrumb" aria-label="Breadcrumb">
     <a href="/">Templates</a><span aria-hidden="true">/</span><a href="/templates/{{ template.id }}">{{ title }}</a><span aria-hidden="true">/</span><span aria-current="page">Analyzing</span>
   </nav>
@@ -49,7 +49,7 @@
         <dt>This draft</dt><dd data-draft-usd>$0.00</dd>
         <dt>All drafting</dt><dd><span data-total-usd>Not read yet</span> of the ${{ cap }} cap, including earlier command-line runs</dd>
       </dl>
-      <p class="note">Each page is drafted, then checked, by one model call each. Leaving pauses drafting: calls already sent finish and are kept, and this page continues from there when you open it again.</p>
+      <p class="note">Each page is drafted, then checked, by one model call each. Drafting goes on if you leave this page, while the studio is open in this browser: when it finishes, the fields are saved and the template needs review. Closing every studio tab pauses it until the studio is opened again.</p>
       <div class="actions">
         <button class="button button-primary" type="button" hidden data-start>Start drafting</button>
         <button class="button button-primary" type="button" hidden data-continue>Continue drafting</button>

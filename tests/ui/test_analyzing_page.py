@@ -1,6 +1,7 @@
 import pytest
 
 from studio.state import sources
+from studio.ui.pages import ASSET_VERSION
 from tests.state.helpers import POLICY, two_page_pdf
 
 DETAILS = {
@@ -30,11 +31,14 @@ def test_the_hosted_page_shows_the_stages_and_loads_the_driver(signed_in, hosted
     template = make(hosted)
     page = signed_in.get(f"/templates/{template['id']}/analyzing")
     assert page.status_code == 200
-    assert '<script src="/static/analyzing.js" defer></script>' in page.text
+    assert f'<script src="/static/analyzing.js?v={ASSET_VERSION}" defer></script>' in page.text
     for label in ("Upload verified", "Extract document", "Propose fields", "Validate draft"):
         assert label in page.text
     assert 'data-autostart="no"' in page.text and 'data-revision="1"' in page.text
     assert "Fund II &lt;Subscription&gt;" in page.text and "<Subscription>" not in page.text
+    # the title names the draft in the notices of drafting that goes on after this page is left
+    assert 'data-title="Fund II &lt;Subscription&gt;"' in page.text
+    assert "Drafting goes on if you leave this page" in page.text
     assert "script-src 'self'" in page.headers["content-security-policy"]
     started = signed_in.get(f"/templates/{template['id']}/analyzing?start=1")
     assert 'data-autostart="yes"' in started.text

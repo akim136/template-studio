@@ -11,13 +11,13 @@ P3, the core interface. Working today:
 
 - Library, setup, Analyzing, field editor and record pages.
 - Field drafting on the hosted studio only: each page is drafted and then checked by one model
-  call each, within a $10 spend cap. A finished draft saves itself, and the template then needs
-  review. Local mode does not draft.
+  call each, within a $10 spend cap. Drafting goes on while any studio page is open. A finished
+  draft saves itself, and the template then needs review. Local mode does not draft.
 - Saved revisions; review and approval bound to one revision; and a create through a **simulated**
   signing adapter. There is no real signing provider.
 
-`GET /healthz` still reports `"analysis": "NOT_IMPLEMENTED"`. That label predates drafting and is
-now out of date. A test pins it, and changing it needs a scope update (guide section 10).
+`GET /healthz` reports `"analysis": "DRAFTING_HOSTED"`: the hosted studio drafts fields, and local
+mode does not.
 
 ## How it is built
 

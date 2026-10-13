@@ -1,8 +1,10 @@
-// Shared page behaviour: the account menu, signing out, the library's filters, and the toast.
+// Shared page behaviour: the account menu, signing out, the library's filters, the toast, and
+// drafting that goes on in the background.
 "use strict";
 
 window.studio = (() => {
   let toastTimer = null;
+  let refreshLibrary = null; // set on the library: shows the current view again in place
 
   function toast(message) {
     const box = document.querySelector("[data-toast]");
@@ -61,6 +63,7 @@ window.studio = (() => {
     signOut.addEventListener("click", async () => {
       const answer = await api("POST", "/auth/logout");
       if (answer.ok) {
+        drafting.forget(); // nobody signed in carries these drafts on now
         document.body.replaceChildren();
         const note = document.createElement("p");
         note.className = "page";
@@ -146,13 +149,153 @@ window.studio = (() => {
       show(url.href, true);
     });
     window.addEventListener("popstate", () => show(window.location.href, false));
+    refreshLibrary = () => show(window.location.href, false);
+  }
+
+  // ---- drafting that goes on while the studio is open ----
+  // The drafts this browser drives are kept here, so any studio page can carry one on after its
+  // drafting page is left. Each draft is its own key, so tabs tracking different drafts never
+  // overwrite each other, and each belongs to the person signed in when it was kept: another
+  // person's are dropped, and signing out drops them all. A lock per draft keeps one tab driving
+  // it; the server's claims keep every model call single regardless. The step that finishes a
+  // draft saves its fields.
+
+  const DRAFTING_PREFIX = "studio.drafting.";
+  const IDLE_MS = 3000;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const viewer = () => document.body.dataset.viewer; // undefined on a page with nobody to name
+  // The server's ID formats (studio/state/templates.py, drafts.py): a kept entry builds request paths.
+  const TEMPLATE_ID = /^[0-9a-f]{32}$/;
+  const DRAFT_ID = /^[0-9]{8}t[0-9]{6}-[0-9a-f]{8}$/;
+  const mine = (entry) => Boolean(entry && viewer() !== undefined && entry.viewer === viewer()
+    && TEMPLATE_ID.test(entry.template) && DRAFT_ID.test(entry.draft));
+
+  function stored() {
+    try {
+      const keys = Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.key(i));
+      return keys.filter((key) => key && key.startsWith(DRAFTING_PREFIX));
+    } catch {
+      return [];
+    }
+  }
+
+  function read(key) {
+    try { return JSON.parse(window.localStorage.getItem(key)); } catch { return null; }
+  }
+
+  function drop(key) {
+    try { window.localStorage.removeItem(key); } catch { /* already gone */ }
+  }
+
+  // This person's tracked drafts; anyone else's, and anything malformed, are dropped on the way.
+  function tracked() {
+    if (viewer() === undefined) return [];
+    const entries = [];
+    for (const key of stored()) {
+      const entry = read(key);
+      if (mine(entry)) entries.push(entry);
+      else drop(key);
+    }
+    return entries;
+  }
+
+  const drafting = {
+    workers: 4, // model calls a draft keeps going at once, here and on its drafting page
+    track(entry) {
+      const who = viewer();
+      if (who === undefined) return;
+      try {
+        window.localStorage.setItem(DRAFTING_PREFIX + entry.draft, JSON.stringify({ ...entry, viewer: who }));
+      } catch { /* not kept */ }
+    },
+    untrack(draftId) { drop(DRAFTING_PREFIX + draftId); },
+    isTracked(draftId) { return mine(read(DRAFTING_PREFIX + draftId)); },
+    forget() { stored().forEach(drop); },
+    // Runs `work(held)` holding this draft's lock if no other tab holds it, and answers what
+    // `work` answers.
+    hold(draftId, work) {
+      if (!navigator.locks) return work(true);
+      return navigator.locks.request(`studio-draft-${draftId}`, { ifAvailable: true }, (lock) => work(Boolean(lock)));
+    },
+    // Runs `work()` once this draft's lock is free: when the tab driving it finishes or closes.
+    wait(draftId, work) {
+      if (!navigator.locks) return work();
+      return navigator.locks.request(`studio-draft-${draftId}`, () => work());
+    },
+    // How far a draft has got, so an older answer never replaces a newer one.
+    progress(view) {
+      return view.pages.reduce((sum, p) => sum + RANK[p.state], view.preflight === "PASSED" ? 1 : 0);
+    },
+  };
+
+  const RANK = { pending: 0, drafting: 1, drafted: 2, checking: 3, done: 4, lost: 4 };
+  const progress = drafting.progress;
+
+  function finished(entry, view) {
+    if (view.state === "APPLIED") {
+      toast(`${entry.title}: drafting finished. ${plural(view.applied.fields, "field")} saved; it needs review.`);
+    } else if (view.state === "DRAFTED") {
+      toast(`${entry.title}: drafting finished, but nothing was saved: ${view.not_applied || "open it to see why"}.`);
+    } else {
+      toast(`${entry.title}: drafting stopped. Open it to see why.`);
+    }
+    if (refreshLibrary) refreshLibrary();
+  }
+
+  async function carryOn(entry) {
+    const path = `/api/templates/${entry.template}/drafts/${entry.draft}/step`;
+    let view = null;
+    let paused = false;
+    const send = async () => {
+      const answer = await api("POST", path);
+      if (!answer.ok) {
+        paused = true;
+        if ([404, 409, 422].includes(answer.status)) drafting.untrack(entry.draft); // it cannot go on
+        return;
+      }
+      const next = answer.data;
+      if (!view || (view.state === "RUNNING" && (next.state !== "RUNNING" || progress(next) >= progress(view)))) view = next;
+    };
+    await send();
+    while (!paused && view.state === "RUNNING") {
+      if (!entry.announced) {
+        entry.announced = true; // once per draft, not on every page
+        if (drafting.isTracked(entry.draft)) drafting.track(entry);
+        toast(`${entry.title}: drafting goes on in the background.`);
+      }
+      const open = view.pages.filter((p) => p.state === "pending" || p.state === "drafted").length;
+      const before = progress(view);
+      const calls = view.preflight === "PASSED" ? Math.max(1, Math.min(drafting.workers, open)) : 1;
+      await Promise.all(Array.from({ length: calls }, send));
+      if (view.state === "RUNNING" && progress(view) === before) await sleep(IDLE_MS); // calls still out elsewhere
+    }
+    if (paused) return; // picked up again on the next page
+    drafting.untrack(entry.draft);
+    finished(entry, view);
+  }
+
+  // Every draft this browser drives goes on here, except the one this drafting page drives itself.
+  // A draft another tab is driving waits for it, and goes on here if that tab closes first.
+  function setUpDrafting() {
+    const page = document.querySelector("[data-analyzing]");
+    const here = page ? page.dataset.template : null;
+    drop("studio.drafting"); // the single shared list an earlier build kept
+    for (const entry of tracked()) {
+      if (entry.template === here) continue;
+      drafting.wait(entry.draft, async () => {
+        const current = read(DRAFTING_PREFIX + entry.draft); // gone if it finished meanwhile
+        if (mine(current)) await carryOn(current);
+      });
+    }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     setUpMenu();
     setUpFilters();
     setUpLibrary();
+    setUpDrafting();
   });
 
-  return { api, reason, toast };
+  return { api, reason, toast, drafting };
 })();
