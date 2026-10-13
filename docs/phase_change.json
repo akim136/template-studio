@@ -2,7 +2,7 @@
   "phase": "P3",
   "kind": "feature",
   "features": [
-    "F-P3-core-ui"
+    "F-P3-solution-brief"
   ],
-  "summary": "Interface cleanup: the drafting page's cost lines and model-call note, the drawer's approval note and the dialog's read-back text are removed, and selects match the search field."
+  "summary": "The solution brief's status: main d64f620 with PRs #13–#24 merged and 676 tests, and the studio on studio.akbuilds.dev."
 }
