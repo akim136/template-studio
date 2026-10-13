@@ -4,5 +4,5 @@
   "features": [
     "F-P3-core-ui"
   ],
-  "summary": "A shorter README: what the studio is and what works today, what it is built on, how to run and check it, and where the rules live (the guide and tests)."
+  "summary": "The completion dialog shows its steps one after another, as in the design, instead of flipping all three together when the simulated create answers."
 }
