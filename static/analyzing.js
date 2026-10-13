@@ -23,7 +23,6 @@
   let leaving = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const usd = (value) => `$${Number(value).toFixed(value < 1 ? 4 : 2)}`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   // ---- what the draft shows ----
@@ -145,10 +144,6 @@
       $("[data-stopped-text]").textContent = text;
     }
     renderResult();
-    if (view) {
-      $("[data-draft-usd]").textContent = usd(view.spend.draft_usd);
-      $("[data-total-usd]").textContent = usd(view.spend.total_usd);
-    }
     const current = view && view.base_revision === revision;
     const stale = view && !current && view.state !== "APPLIED";
     $("[data-start]").hidden = !loaded || Boolean(view) || driving || busy !== "";

@@ -119,6 +119,11 @@ a.button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
   height: 36px; padding: 0 12px; border: 1px solid var(--gray-4); border-radius: 8px; font-size: 14px;
   background: #fff; width: 100%;
 }
+/* the browser's own arrow sits against the edge; this one matches the search icon */
+.select {
+  appearance: none; padding-right: 36px; cursor: pointer;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23868e96' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6l6 -6'/%3E%3C/svg%3E") no-repeat right 11px center / 16px 16px;
+}
 .input:focus, .select:focus { border-color: var(--primary); outline: none; }
 .label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .help { font-size: 12px; color: var(--gray-7); margin: 6px 0 0; }
@@ -302,10 +307,6 @@ table.templates { width: 100%; min-width: 640px; border-collapse: collapse; font
 .stages [data-state="failed"] .stage-label { color: var(--red-9); }
 .stack-tight { display: flex; flex-direction: column; gap: 6px; }
 .result-line { margin: 0; font-weight: 600; }
-.note {
-  margin: 0; font-size: 12px; color: var(--gray-7); background: var(--gray-0); border-radius: 6px;
-  padding: 10px 12px;
-}
 
 /* Dialog */
 dialog {

@@ -38,7 +38,9 @@ def test_the_hosted_page_shows_the_stages_and_loads_the_driver(signed_in, hosted
     assert "Fund II &lt;Subscription&gt;" in page.text and "<Subscription>" not in page.text
     # the title names the draft in the notices of drafting that goes on after this page is left
     assert 'data-title="Fund II &lt;Subscription&gt;"' in page.text
-    assert "Drafting goes on if you leave this page" in page.text
+    # no draft cost, spend total or note on model calls before the studio is opened to others
+    for removed in ("data-spend", "All drafting", "Each page is drafted"):
+        assert removed not in page.text
     assert "script-src 'self'" in page.headers["content-security-policy"]
     started = signed_in.get(f"/templates/{template['id']}/analyzing?start=1")
     assert 'data-autostart="yes"' in started.text

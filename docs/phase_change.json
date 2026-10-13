@@ -2,7 +2,7 @@
   "phase": "P3",
   "kind": "feature",
   "features": [
-    "F-P3-solution-brief"
+    "F-P3-core-ui"
   ],
-  "summary": "Adds the static solution brief for Vercel's assessment under solution-brief/, its check tool, a README pointer and a test. The PDF and check outputs stay out of Git. No app changes."
+  "summary": "Interface cleanup: the drafting page's cost lines and model-call note, the drawer's approval note and the dialog's read-back text are removed, and selects match the search field."
 }

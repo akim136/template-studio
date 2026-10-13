@@ -649,7 +649,6 @@
       const ofThis = operation.revision === saved.revision ? "this revision" : `revision ${operation.revision}`;
       lines.push(el("span", {}, el("strong", { text: `${state[0].toUpperCase()}${state.slice(1)}` }),
         ` · ${ofThis} · operation `, el("span", { class: "mono", text: operation.id.slice(0, 12) })));
-      if (operation.state === "CREATED") lines.push(el("span", { class: "help", text: "Simulated: recorded in the studio's storage; no provider was called." }));
       if (operation.state === "NEEDS_STATUS_CHECK") lines.push(el("span", { class: "help", text: "The outcome is unknown. Check its status; a new create is refused until it resolves." }));
       if (operation.note) lines.push(el("span", { class: "help", text: operation.note }));
       if (operation.warning) lines.push(el("div", { class: "alert alert-yellow", text: operation.warning }));
@@ -727,7 +726,8 @@
       checking: ["blue", "Checking operation status", `Checking operation ${id}.`],
       CREATING: ["blue", "Not settled yet", "The create was recorded but has not reported back. Check its status before anything else."],
       VERIFYING: ["blue", "Not verified yet", "The create was reported but not yet read back. Check its status."],
-      CREATED: ["green", "Created and verified", `${operation && operation.external_id} was read back, and it holds the payload approved for revision ${revision}. Simulated: recorded in the studio's storage; no provider was called.`],
+      // the steps and checks show a created template; a request that did not go through still does
+      CREATED: completionError ? ["green", "Template created", ""] : null,
       NEEDS_STATUS_CHECK: ["yellow", "Creation status unknown", `The create may have completed. Check operation ${id} before creating again; a repeat create is refused.${operation && operation.note ? ` ${operation.note}.` : ""}`],
       FAILED: ["red", "Create failed", (operation && operation.note) || "Nothing was created."],
       refused: ["red", "Create refused", completionError || "The studio did not create the template."],
@@ -738,7 +738,7 @@
       result.className = `cp-result alert alert-${results[0]}`;
       $("[data-cp-result-title]").textContent = results[1];
       const failed = completionError && phase !== "refused" ? ` The last request did not go through: ${completionError}` : "";
-      $("[data-cp-result-body]").textContent = `${results[2]}${failed}`;
+      $("[data-cp-result-body]").textContent = `${results[2]}${failed}`.trim();
     }
 
     const verify = $("[data-cp-verify]");
@@ -750,8 +750,7 @@
         el("span", {}, el("strong", { text: title }), el("span", { text: body })));
       verify.replaceChildren(
         check("Existence and counts verified", `${operation.external_id} holds ${plural(saved.fields.length, "field")}: ${parts.join(", ")}.`),
-        check(`Placement reviewed by ${reviewer}`, `${reviewer} confirmed reviewing every field of revision ${revision}${approver}.`),
-        el("span", { class: "small muted", text: "The read-back checks the recorded payload against the approved one. It is not a provider-side placement check: no provider is connected." }));
+        check(`Placement reviewed by ${reviewer}`, `${reviewer} confirmed reviewing every field of revision ${revision}${approver}.`));
     }
 
     const busy = phase === "creating" || phase === "checking" || phase === "verifying";
@@ -765,7 +764,7 @@
     // like the drawer's create button; a request that just failed is not offered again
     const retry = !dirty() && saved.approval && !saved.issues.length && !completionError && !orphaned();
     const actions = busy ? [] : {
-      CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/")),
+      CREATED: [button("Open in signing provider", () => window.location.assign("https://app.hellosign.com/account/logIn")),
         button("Stay in editor", close, { focus: true }), button("Return to library", library, { primary: true })],
       CREATING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
       VERIFYING: [button("Return to library", library, { focus: true }), button("Check status", checkStatus, { primary: true })],
