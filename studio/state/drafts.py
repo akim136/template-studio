@@ -427,7 +427,10 @@ class Drafts:
             return False
         self._halt_if_stopped(prefix, runner)
         output = None
-        if prepared is None:
+        if drafted["status"] != "RECEIVED":  # a step that ended before it marked this
+            evidence.stage_a = drafted["status"]
+            evidence.stage_b = f"NOT_RUN: stage A has no answer ({drafted['status']})"
+        elif prepared is None:
             evidence.stage_b = f"NOT_RUN: the page could not be prepared again ({evidence.stage_a})"
         elif evidence.image_sha256 != drafted["evidence"]["image_sha256"]:
             evidence.stage_b = "NOT_RUN: the page image differs from the one stage A saw"

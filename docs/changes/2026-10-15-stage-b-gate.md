@@ -18,6 +18,11 @@ One predicate, `inference.needs_check`, decides this for both callers: the CLI a
 runner (`Runner.stage_b`) and the hosted draft steps (`studio/state/drafts.py`), where a page that
 needs no check is finished by its stage A step and leaves no stage B step behind.
 
+A hosted stage B step now first reads the stage A record it continues. If that record holds no
+answer (a step that failed, then ended before it marked the page), the page is `NOT_RUN: stage A
+has no answer` and is not inspected. Before, such a page reached the gate as an empty draft. With
+candidates no longer a reason to check, it would have counted as inspected without any answer.
+
 ## Evidence (offline, no model calls)
 
 An exact per-page replay of 26 existing runs (dev-a, dev-b and the synthetic document, with

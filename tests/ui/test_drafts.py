@@ -10,7 +10,7 @@ from studio.state.drafts import Drafts, Unavailable
 from studio.state.errors import Conflict, Invalid
 from studio.state.ledger import CAP_USD, HEAD, StoreLedger
 from studio.state.store import canonical
-from tests.analysis.fake_gateway import FakeGateway, page_of
+from tests.analysis.fake_gateway import FakeGateway, first_candidate_answer, page_of
 from tests.analysis.pdf_factory import make_pdf
 from tests.analysis.test_fields import FORM
 from tests.analysis.test_inference import stages
@@ -129,6 +129,26 @@ def test_a_page_whose_draft_is_empty_is_not_checked_even_with_candidates(book, t
     assert view["state"] == drafts.DRAFTED and view["done"] == 2
     outcome = book.result(template["id"], draft["id"])
     assert outcome["status"] == "COMPLETE" and outcome["fields"] == []
+
+
+def test_a_failed_draft_cut_short_before_its_check_was_marked_is_not_checked(
+    book, template, monkeypatch
+):
+    def answer(body):  # page 1's draft is unusable; every other answer is the usual one
+        drafting = "changes" not in body["response_format"]["json_schema"]["schema"]["properties"]
+        return {"notes": ""} if drafting and page_of(body) == 1 else first_candidate_answer(body)
+
+    draft = book.start(template["id"], 1, "anonymous")
+    gateway_ = fake(answer=answer)
+    book.step(template["id"], draft["id"], "t", gateway_)  # the preflight
+    with monkeypatch.context() as cut:
+        cut.setattr(book, "_finish_b", lambda *args: (_ for _ in ()).throw(RuntimeError("ended")))
+        with pytest.raises(RuntimeError):  # page 1's stage A failed; its request ended there
+            book.step(template["id"], draft["id"], "t", gateway_)
+    run_to_end(book, template, draft, gateway_)
+    outcome = book.result(template["id"], draft["id"])
+    assert outcome["status"] == "PARTIAL" and [u["page"] for u in outcome["unfinished"]] == [1]
+    assert outcome["unfinished"][0]["status"].startswith("NOT_RUN: stage A has no answer")
 
 
 def test_a_step_reads_only_its_own_page(book, template, source, monkeypatch):
