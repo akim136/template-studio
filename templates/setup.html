@@ -13,18 +13,24 @@
         <div class="section-head">
           <span class="step" aria-hidden="true">1</span>
           <div>
-            <h2 id="sec-sponsor">Name the sponsor account</h2>
-            <p>The business context for this template, as you know it. The studio has no account directory, so type it exactly; it is never inferred from a title or file name.</p>
+            <h2 id="sec-sponsor">Choose the sponsor account</h2>
+            <p>The business this template is for. For the demo, pick one of {{ demo_sponsors | length }} fictional customers, listed A to Z; each has a fixed account ID. It is never inferred from a title or file name.</p>
           </div>
         </div>
         <div class="field-row">
           <div>
-            <label class="label" for="sponsor-name">Sponsor account name</label>
-            <input class="input" id="sponsor-name" maxlength="200" autocomplete="off" required data-sponsor-name>
+            <label class="label" for="sponsor-pick">Sponsor account</label>
+            <select class="select" id="sponsor-pick" autocomplete="off" required data-sponsor-pick>
+              <option value="">Choose a customer…</option>
+              {%- for name, account_id in demo_sponsors %}
+              <option value="{{ account_id }}" data-name="{{ name }}">{{ name }}</option>
+              {%- endfor %}
+            </select>
+            <input type="hidden" data-sponsor-name>
           </div>
           <div>
-            <label class="label" for="sponsor-id">Account ID <span class="muted">(optional)</span></label>
-            <input class="input mono" id="sponsor-id" maxlength="64" autocomplete="off" data-sponsor-id>
+            <label class="label" for="sponsor-id">Account ID</label>
+            <input class="input mono" id="sponsor-id" readonly placeholder="Set by the customer" data-sponsor-id>
           </div>
         </div>
       </section>

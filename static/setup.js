@@ -2,7 +2,8 @@
 //
 // The PDF is hashed here, then either PUT straight to R2 through a presigned URL and sealed
 // (hosted), or POSTed to the studio (local). The server re-hashes and inventories it; only the
-// sealed record it answers is shown. Nothing here is sample data.
+// sealed record it answers is shown. The sponsor account comes from the page's list of fictional
+// demo customers; the picked name and ID are sent as typed details, as before.
 "use strict";
 
 (() => {
@@ -158,7 +159,7 @@
   function blockers() {
     const typed = details();
     const reasons = [];
-    if (!typed.sponsor_name) reasons.push("Type the sponsor account name");
+    if (!typed.sponsor_name) reasons.push("Choose the sponsor account");
     if (typed.sponsor_account_id && !ACCOUNT_ID.test(typed.sponsor_account_id)) {
       reasons.push("Account ID: letters, digits, '_', '.', ':' or '-'");
     }
@@ -341,6 +342,17 @@
     const file = event.dataTransfer.files[0];
     if (file) choose(file);
   });
+  // The picker fills the name and ID that details() reads. Its own listener runs before the
+  // root's change listener below, so render() sees the new values.
+  const sponsorPick = $("[data-sponsor-pick]");
+  function takeSponsor() {
+    const chosen = sponsorPick.value ? sponsorPick.selectedOptions[0] : null;
+    $("[data-sponsor-name]").value = chosen ? chosen.dataset.name : "";
+    $("[data-sponsor-id]").value = chosen ? chosen.value : "";
+  }
+  sponsorPick.addEventListener("change", takeSponsor);
+  takeSponsor(); // a browser may restore the picker's choice on reload
+
   root.addEventListener("input", render);
   root.addEventListener("change", (event) => {
     if (event.target === input) return;
