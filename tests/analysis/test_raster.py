@@ -169,3 +169,37 @@ def test_a_page_with_too_many_ink_runs_reports_nothing_and_says_why(monkeypatch)
 def test_rows_that_do_not_match_the_page_size_are_refused():
     with pytest.raises(ValueError):
         raster.find([b"\xff" * 30] * 19, 30, 20, 3.0, **LIMITS)
+
+
+def test_a_dashed_line_with_too_little_ink_is_not_a_line():
+    page = Canvas()
+    for dash in range(10):  # 4-point dashes 1 point apart: 40 of 49 points inked
+        page.fill(20 + 5 * dash, 100, 24 + 5 * dash, 101)
+    assert page.find().lines == []
+
+
+def test_checkboxes_are_held_to_the_size_limits():
+    page = Canvas()
+    page.frame(20, 20, 5)
+    page.frame(60, 20, 18)
+    page.fill(100, 50, 118, 52)  # an 18-by-21-point frame drawn with 2-point sides
+    page.fill(100, 69, 118, 71)
+    page.fill(100, 50, 102, 71)
+    page.fill(116, 50, 118, 71)
+    found = page.find()
+    assert [round(right - left) for left, _, right, _ in found.boxes] == [5, 18]
+
+
+def test_a_page_of_box_edges_stops_after_a_bounded_number_of_checks(monkeypatch):
+    checks = []
+    boxed = raster._boxed
+    monkeypatch.setattr(raster, "PAIR_LIMIT", 500)
+    monkeypatch.setattr(raster, "_boxed", lambda *args: checks.append(1) or boxed(*args))
+    page = Canvas(size=(200.0, 200.0))
+    for top in range(0, 200, 2):  # rows of 4-point dashes: thousands of possible box edges
+        for left in range(0, 196, 6):
+            page.fill(left, top + 0.34, left + 4, top + 0.67)
+    found = page.find()
+    assert (found.lines, found.boxes) == ([], [])
+    assert found.note == "image scan stopped after 500 box checks; nothing is reported"
+    assert len(checks) <= 500

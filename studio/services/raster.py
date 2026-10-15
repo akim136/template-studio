@@ -13,6 +13,8 @@ the same sizes as a drawn one.
 
 from __future__ import annotations
 
+import bisect
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -28,10 +30,12 @@ EDGE_MATCH = 1.5  # points between the ends of a box's top and bottom edges
 SIDE_COVERAGE = 0.8  # share of the rows between those edges that each side must ink
 INTERIOR_INK_MAX = 0.6  # a filled square is a bullet, not a box; a ticked box stays a box
 SEGMENT_LIMIT = 200_000  # ink runs read per page at most; past that nothing is reported
+PAIR_LIMIT = 100_000  # pairs of edges tried as a box's top and bottom; past that, likewise
 SAMPLE_STEP = 4  # every 4th row, and every 2nd pixel in it, make the grey-level histogram
 INK_MIN, INK_MAX = 96, 200  # the ink threshold is kept in this range of grey levels
 
 Rect = tuple[float, float, float, float]
+Segment = tuple[int, int, int, tuple[tuple[int, int], ...]]  # row, start, end, inked spans
 
 
 @dataclass(frozen=True)
@@ -79,9 +83,9 @@ def ink_threshold(rows: list[bytes]) -> int:
     return min(max(threshold, INK_MIN), INK_MAX)
 
 
-def _segments(ink: list[bytes], scale: float) -> tuple[list[tuple[int, int, int]], bool]:
-    """(row, start, end) of each horizontal ink run long enough to read, with short breaks
-    bridged; the flag is set if SEGMENT_LIMIT was passed."""
+def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
+    """Each horizontal ink run long enough to read, with short breaks bridged, and the inked
+    spans inside it; the flag is set if SEGMENT_LIMIT was passed."""
     gap = max(1, round(GAP_MAX * scale))
     least = max(2, round(SEGMENT_MIN * scale))
     bridged = re.compile(rb"\x01+(?:\x00{1,%d}\x01+)*" % gap)
@@ -92,10 +96,11 @@ def _segments(ink: list[bytes], scale: float) -> tuple[list[tuple[int, int, int]
             start, end = match.span()
             if end - start < least:
                 continue
-            if match.group().count(1) >= SEGMENT_INK * (end - start):
-                out.append((y, start, end))
+            inked = [(start + s, start + e) for s, e in _spans(solid, match.group(), 1)]
+            if sum(e - s for s, e in inked) >= SEGMENT_INK * (end - start):
+                out.append((y, start, end, tuple(inked)))
             else:  # too sparse to bridge: keep its solid runs that are long enough
-                out += [(y, start + s, start + e) for s, e in _spans(solid, match.group(), least)]
+                out += [(y, s, e, ((s, e),)) for s, e in inked if e - s >= least]
             if len(out) > SEGMENT_LIMIT:
                 return [], True
     return out, False
@@ -105,7 +110,7 @@ def _spans(pattern: re.Pattern[bytes], data: bytes, least: int) -> list[tuple[in
     return [m.span() for m in pattern.finditer(data) if m.end() - m.start() >= least]
 
 
-def _bands(segments: list[tuple[int, int, int]], gap: int) -> list[_Band]:
+def _bands(segments: list[Segment], gap: int) -> list[_Band]:
     """Join runs in adjacent rows that overlap or touch, then measure each group."""
     parent = list(range(len(segments)))
 
@@ -116,7 +121,7 @@ def _bands(segments: list[tuple[int, int, int]], gap: int) -> list[_Band]:
         return i
 
     by_row: dict[int, list[int]] = {}
-    for i, (y, _, _) in enumerate(segments):
+    for i, (y, *_) in enumerate(segments):
         by_row.setdefault(y, []).append(i)  # each row's runs arrive in order of start
     for y, here in by_row.items():
         above = by_row.get(y - 1)
@@ -124,33 +129,36 @@ def _bands(segments: list[tuple[int, int, int]], gap: int) -> list[_Band]:
             continue
         first = 0
         for i in here:
-            _, start, end = segments[i]
+            _, start, end, _ = segments[i]
             while first < len(above) and segments[above[first]][2] + gap < start:
                 first += 1
             j = first
             while j < len(above) and segments[above[j]][1] <= end + gap:
                 parent[root(i)] = root(above[j])
                 j += 1
-    groups: dict[int, list[tuple[int, int, int]]] = {}
+    groups: dict[int, list[Segment]] = {}
     for i, segment in enumerate(segments):
         groups.setdefault(root(i), []).append(segment)
     return [_measure(group) for group in groups.values()]
 
 
-def _measure(group: list[tuple[int, int, int]]) -> _Band:
-    left = min(start for _, start, _ in group)
-    right = max(end for _, _, end in group)
+def _measure(group: list[Segment]) -> _Band:
+    """Measure a band from its inked spans; the bridged breaks only joined it."""
+    left = min(start for _, start, _, _ in group)
+    right = max(end for _, _, end, _ in group)
     steps = [0] * (right - left + 1)
     weight = sum_x = sum_y = sum_xx = sum_xy = 0.0
-    for y, start, end in group:
-        steps[start - left] += 1
-        steps[end - left] -= 1
-        n, mid, row = end - start, (start + end) / 2, y + 0.5
-        weight += n
-        sum_x += n * mid
-        sum_y += n * row
-        sum_xx += n * (mid * mid + n * n / 12)  # a run's own spread along x
-        sum_xy += n * mid * row
+    for y, _, _, inked in group:
+        row = y + 0.5
+        for start, end in inked:
+            steps[start - left] += 1
+            steps[end - left] -= 1
+            n, mid = end - start, (start + end) / 2
+            weight += n
+            sum_x += n * mid
+            sum_y += n * row
+            sum_xx += n * (mid * mid + n * n / 12)  # a run's own spread along x
+            sum_xy += n * mid * row
     depth, inked = 0, []
     for step in steps[:-1]:
         depth += step
@@ -163,8 +171,8 @@ def _measure(group: list[tuple[int, int, int]]) -> _Band:
     return _Band(
         left=left,
         right=right,
-        top=min(y for y, _, _ in group),
-        bottom=max(y for y, _, _ in group) + 1,
+        top=min(y for y, *_ in group),
+        bottom=max(y for y, *_ in group) + 1,
         centre=mean_y,
         thickness=inked[len(inked) // 2],
         coverage=len(inked) / (right - left),
@@ -232,26 +240,39 @@ def find(
             lines.append(rect(band.left, band.centre - half, band.right, band.centre + half))
 
     match, side = EDGE_MATCH * scale, max(2, round(EDGE_MAX_THICKNESS * scale))
+    least, most = (box_min - EDGE_MATCH) * scale, (box_max + EDGE_MATCH) * scale
     edges = [
         band
         for band in bands
-        if (box_min - EDGE_MATCH) * scale
-        <= band.right - band.left
-        <= (box_max + EDGE_MATCH) * scale
+        if least <= band.right - band.left <= most
         and band.thickness <= side
         and band.coverage >= LINE_COVERAGE
     ]
     edges.sort(key=lambda band: (band.top, band.left))
-    boxes = []
-    for i, top in enumerate(edges):
-        for bottom in edges[i + 1 :]:
-            if bottom.top - top.top > (box_max + EDGE_MATCH) * scale:
-                break
-            if abs(bottom.left - top.left) > match or abs(bottom.right - top.right) > match:
+    by_left: dict[int, list[_Band]] = {}  # each list in order of top
+    for band in edges:
+        by_left.setdefault(band.left, []).append(band)
+    tops = {left: [band.top for band in column] for left, column in by_left.items()}
+    boxes, tried = [], 0
+    for top in edges:
+        below = []  # edges starting under this one, within a box's height and EDGE_MATCH of it
+        for left in range(math.ceil(top.left - match), math.floor(top.left + match) + 1):
+            column = by_left.get(left, [])
+            for j in range(bisect.bisect_right(tops.get(left, []), top.top), len(column)):
+                if column[j].top - top.top > most:
+                    break
+                below.append(column[j])
+        tried += len(below)
+        if tried > PAIR_LIMIT:
+            return Shapes(
+                note=f"image scan stopped after {PAIR_LIMIT} box checks; nothing is reported"
+            )
+        for bottom in sorted(below, key=lambda band: (band.top, band.left)):
+            if abs(bottom.right - top.right) > match:
                 continue
             left, right = min(top.left, bottom.left), max(top.right, bottom.right)
             tall, wide = bottom.bottom - top.top, right - left
-            if tall < (box_min - EDGE_MATCH) * scale or abs(wide - tall) > box_skew * scale:
+            if not least <= tall <= most or wide > most or abs(wide - tall) > box_skew * scale:
                 continue
             if _boxed(ink, left, right, top, bottom, side):
                 boxes.append(rect(left, top.top, right, bottom.bottom))
