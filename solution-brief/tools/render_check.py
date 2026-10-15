@@ -38,23 +38,34 @@ SECTIONS = ["overview", "problem", "architecture", "choices", "demo"]
 SECTIONS += ["rollout", "success", "risks", "validation"]
 for section in SECTIONS:
     check("section_" + section, soup.select_one("#" + section) is not None)
-check("correct_current_commit", "527b3ca" in text and "b4a7dfd" in text)
+check("correct_current_commit", "60fa80a" in text and "b4a7dfd" in text)
 check("no_stale_commit", "d64f620" not in text and "a15cac6" not in text)
-check("pr_status", "PRs #13–#29 and #31 merged" in text and "#13–#24" not in text)
+check(
+    "pr_status",
+    "PRs #13–#29, #31 and #34 merged" in text
+    and "PRs #13–#29 and #31 merged" not in text
+    and "#13–#24" not in text,
+)
 architecture = soup.select_one("#architecture").get_text(" ", strip=True)
 check("correct_storage", "Cloudflare R2" in architecture and "immutable revisions" in text)
 check("no_target_worker", "Worker" not in target_text(1))
 check("no_target_d1", "D1" not in target_text(1))
 check("no_sandbox_features", "Sandbox" not in target_text(1))
 check("in_app_simulation", "In-app adapter" in text and "simulated" in text.lower())
-check("sponsor_typed", "Enter a sponsor name" in text or "Type the sponsor" in text)
+check(
+    "sponsor_picker",
+    "fictional demo customers" in text and "Enter a sponsor name" not in text,
+)
 check("ai_gateway_openai", "AI Gateway" in text and "OpenAI" in text)
 check("spend_cap", "$20 spend cap" in text and "$10 spend cap" not in text)
 check("fixed_model", "gpt-5.4-mini" in text and "no model selector" in text)
 check("provisional_scores", "provisional" in text.lower() and "UNREVIEWED" in text)
 check("no_reviewed_reference_claim", "Against reviewed references" not in text)
 check("no_unadjudicated_claim", "not adjudicated" not in text)
-check("executed_tests", "698 pytest tests" in text and "676 pytest" not in text)
+check(
+    "executed_tests",
+    "698 pytest tests" in text and "700 pytest tests" in text and "676 pytest" not in text,
+)
 check("preview_shared_bucket", "synthetic-only R2 bucket" in text)
 check("browser_driven_limit", "while a Studio page remains open" in text)
 check("no_chatgpt_credit", "ChatGPT" not in text and "Codex" not in text)
