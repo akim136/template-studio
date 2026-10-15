@@ -204,6 +204,14 @@ def test_checkboxes_are_held_to_the_size_limits():
     assert [round(right - left) for left, _, right, _ in found.boxes] == [5, 18]
 
 
+@pytest.mark.parametrize("scale", [25 / 12, 200 / 72, 3.0])
+def test_the_largest_checkboxes_are_found_wherever_their_pixels_round(scale):
+    page = Canvas(scale, size=(200.0, 60.0))
+    for k, left in enumerate([20, 20.1, 20.2, 20.3, 24]):
+        page.frame(left + 30 * k, 20, 18)
+    assert [round(right - left) for left, _, right, _ in page.find().boxes] == [18] * 5
+
+
 def test_a_page_of_box_edges_stops_after_a_bounded_number_of_checks(monkeypatch):
     checks = []
     boxed = raster._boxed
