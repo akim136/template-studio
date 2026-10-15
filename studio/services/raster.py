@@ -31,9 +31,10 @@ EDGE_MATCH = 1.5  # points between the ends of a box's top and bottom edges, and
 # shorter than the box an edge may read
 SIDE_COVERAGE = 0.8  # share of the rows between those edges that each side must ink
 INTERIOR_INK_MAX = 0.6  # a filled square is a bullet, not a box; a ticked box stays a box
-SEGMENT_LIMIT = 200_000  # ink runs read per page at most; past that nothing is reported
+SEGMENT_LIMIT = 200_000  # runs of ink read per page at most; past that nothing is reported
 PAIR_LIMIT = 100_000  # pairs of edges tried as a box's top and bottom; past that, likewise
-SAMPLE_STEP = 4  # every 4th row, and every 2nd pixel in it, make the grey-level histogram
+SAMPLE_STEP = 8  # every 8th pixel of every row makes the grey-level histogram, so no run of
+# 8 pixels is missed
 INK_MIN, INK_MAX = 96, 200  # the ink threshold is kept in this range of grey levels
 
 Rect = tuple[float, float, float, float]
@@ -64,8 +65,8 @@ class _Band:
 def ink_threshold(rows: list[bytes]) -> int:
     """Otsu's threshold on a sample of grey levels: a pixel darker than it is ink."""
     counts: Counter[int] = Counter()
-    for row in rows[::SAMPLE_STEP]:
-        counts.update(row[::2])
+    for row in rows:
+        counts.update(row[::SAMPLE_STEP])
     total = sum(counts.values())
     level_sum = sum(level * n for level, n in counts.items())
     best, threshold = -1.0, 128
@@ -87,26 +88,27 @@ def ink_threshold(rows: list[bytes]) -> int:
 
 def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
     """Each horizontal ink run long enough to read, with short breaks bridged, and the inked
-    spans inside it; the flag is set if SEGMENT_LIMIT was passed."""
+    spans inside it; the flag is set once more than SEGMENT_LIMIT runs of ink were read."""
     gap = max(1, round(GAP_MAX * scale))
-    least = max(2, round(SEGMENT_MIN * scale))
+    least = max(2, math.ceil(SEGMENT_MIN * scale))
     bridged = re.compile(rb"\x01+(?:\x00{1,%d}\x01+)*" % gap)
     solid = re.compile(rb"\x01+")
-    out = []
+    out, read = [], 0
     for y, row in enumerate(ink):
         for match in bridged.finditer(row):
             start, end = match.span()
             if end - start < least:
                 continue
-            inked = [
-                (start + s, start + e) for s, e in map(re.Match.span, solid.finditer(match.group()))
-            ]
+            inked = []
+            for run in solid.finditer(row, start, end):
+                read += 1
+                if read > SEGMENT_LIMIT:
+                    return [], True
+                inked.append(run.span())
             if sum(e - s for s, e in inked) >= SEGMENT_INK * (end - start):
                 out.append((y, start, end, tuple(inked)))
             else:  # too sparse to bridge: keep its solid runs that are long enough
                 out += [(y, s, e, ((s, e),)) for s, e in inked if e - s >= least]
-            if len(out) > SEGMENT_LIMIT:
-                return [], True
     return out, False
 
 

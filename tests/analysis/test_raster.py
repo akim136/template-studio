@@ -212,3 +212,24 @@ def test_a_small_box_with_heavy_sides_is_not_closed_up_by_gap_bridging(scale):
     page = Canvas(scale)
     page.frame(20, 20, 5, stroke=2)  # one point of paper inside
     assert page.find().boxes == [tuple(pytest.approx(v, abs=0.5) for v in (20, 20, 25, 25))]
+
+
+def test_every_run_of_ink_counts_toward_the_limit_even_inside_a_bridged_run(monkeypatch):
+    monkeypatch.setattr(raster, "SEGMENT_LIMIT", 50)
+    dotted = b"\x00\x00\x00\x00\xff" * 40  # 40 runs of ink that bridge into one
+    rows = [dotted] * 3 + [b"\xff" * 200] * 7
+    found = raster.find(rows, 200, 10, 3.0, **LIMITS)
+    assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
+
+
+@pytest.mark.parametrize("top", [119, 119.34, 119.67, 120])
+def test_a_faint_rule_is_found_whichever_rows_it_falls_on(top):
+    page = Canvas()
+    page.fill(40, top, 240, top + 1, level=150)
+    assert len(page.find().lines) == 1
+
+
+def test_heavy_box_sides_are_not_read_as_runs_at_one_pixel_per_point():
+    page = Canvas(scale=1.0)
+    page.frame(20, 20, 10, stroke=2)
+    assert page.find().boxes == [(20, 20, 30, 30)]
