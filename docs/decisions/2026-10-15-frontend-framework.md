@@ -46,9 +46,9 @@ the spike leaves out the header's icons.
 | | Library today (FastAPI) | Library in Next.js |
 |---|---|---|
 | Script the browser runs | 1 file, 12.9 KB (4.5 KB gzip) | 6 files, 456 KB (132 KB gzip), plus 11 to 13 KB inline |
-| Median HTML response, 30 requests | 1.0 to 1.3 ms | 3.6 to 4.3 ms (it makes two API calls first) |
+| Median HTML response, 30 requests (range over runs) | 1.0 to 1.3 ms | 3.6 to 5.3 ms (it makes two API calls first) |
 | Install | nothing new | 30 npm packages, 375 MB on disk (the SWC compiler binary alone is 96 MB) |
-| Build | none | 2.8 s warm, 5.3 s cold |
+| Build | none | 2.5 to 2.9 s warm, 5.3 s cold |
 | Today's CSP, unchanged | works | 3 inline scripts blocked; the page never becomes interactive |
 | CSP with a per-request nonce | not needed | works, no console errors |
 
