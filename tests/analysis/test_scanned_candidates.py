@@ -1,14 +1,13 @@
-import io
+import math
 
 import pytest
-from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 
 from studio.services import candidates as candidates_module
 from studio.services.candidates import extract_candidates, page_candidates
 from tests.analysis.fake_gateway import FakeGateway, page_of
 from tests.analysis.pdf_factory import image_pdf, make_pdf
-from tests.analysis.test_inference import SERIAL, run
+from tests.analysis.test_inference import SERIAL, edited, run
 from tests.analysis.test_raster import Canvas
 
 LETTER = (612.0, 792.0)
@@ -26,14 +25,6 @@ def scanned(draw, **options):
     draw(canvas)
     pixels = b"".join(bytes(row) for row in canvas.rows)
     return image_pdf([(pixels, canvas.width, canvas.height)], **options)
-
-
-def edited(source, change):
-    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(source)))
-    change(writer.pages[0])
-    out = io.BytesIO()
-    writer.write(out)
-    return out.getvalue()
 
 
 def test_a_scanned_page_gets_the_lines_and_boxes_in_its_image():
@@ -148,3 +139,41 @@ def test_the_model_is_told_about_the_candidates_of_a_scanned_page(tmp_path):
     text = stage_a["messages"][-1]["content"][0]["text"]
     assert "\np1-1 rule " in text and "\np1-2 box " in text
     assert record["evidence"][0]["candidates"] == 2
+
+
+def test_candidates_found_in_the_image_are_numbered_after_the_others():
+    low = NAME_LINE.replace(b"720", b"300").replace(b"Tf ", b"Tf 3 Tr ")  # OCR text low down
+    found = extract_candidates(scanned(form, text=low))[0].candidates
+    kinds = [(c.id, c.kind) for c in found]
+    assert kinds == [("p1-1", "underscore"), ("p1-2", "rule"), ("p1-3", "box")]
+    assert found[0].y > found[1].y  # numbered first, though it is lower on the page
+
+
+def test_the_image_scan_scale_keeps_the_bitmap_within_its_budget():
+    assert candidates_module._image_scale(612, 792) == 3.0
+    assert candidates_module._image_scale(1224, 1584) == pytest.approx(2.031, abs=0.001)
+    assert candidates_module._image_scale(0.01, 1e8) is None  # a sliver of millions of rows
+    assert candidates_module._image_scale(0, 792) is None
+    most = candidates_module.IMAGE_MAX_PIXELS + 2 * candidates_module.IMAGE_MAX_SIDE + 1
+    for width, height in [(612, 792), (0.5, 9000), (3.3, 6600), (1224, 1584), (14400, 14400)]:
+        scale = candidates_module._image_scale(width, height)
+        if scale is not None:
+            assert math.ceil(width * scale) * math.ceil(height * scale) <= most
+
+
+def test_lines_are_matched_only_to_underscore_runs_near_their_bottom():
+    runs = [(100.0, 500.0, 200.0, 512.0), (100.0, 300.0, 200.0, 312.0)]  # left, bottom, right, top
+    lines = [
+        (90.0, 503.0, 210.0, 504.0),  # 3 points above a run: left to it
+        (90.0, 303.5, 210.0, 304.5),  # 3.5 points: kept
+        (150.0, 500.0, 400.0, 501.0),  # over half of the run, not of itself: left to it
+        (160.0, 300.0, 400.0, 301.0),  # under half of the shorter: kept
+    ]
+    assert candidates_module._apart_from(runs, lines) == [lines[1], lines[3]]
+
+
+@pytest.mark.parametrize("in_form", [False, True])
+def test_each_picture_is_a_page_of_its_own(in_form):
+    blank = (b"\xff" * 4, 2, 2)
+    pages = extract_candidates(image_pdf([blank, blank, blank], in_form=in_form))
+    assert [page.page for page in pages] == [1, 2, 3]

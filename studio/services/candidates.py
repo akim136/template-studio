@@ -8,7 +8,8 @@ A scanned page has no drawn rules or squares, only a picture. A page whose pictu
 IMAGE_COVERAGE of its visible area, and which gives no drawn rule, drawn square or glyph square, is
 rendered in grey and its lines and squares are found in the pixels (`raster`), held to the same
 sizes. They become rules and boxes like the drawn ones, marked `from_image`; a line found where the
-text layer already has an underscore run is left to the underscore.
+text layer already has an underscore run is left to the underscore. They are numbered after the
+page's other candidates, so an id given before the image scan existed keeps its meaning.
 
 Coordinates are source points with a top-left origin, measured from the page's visible area (the
 crop box within the media box), which is the area PDFium renders. Rotated pages are not read.
@@ -19,6 +20,7 @@ drawn-path scan stops after reading PATH_SCAN_LIMIT objects; the page says so in
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
@@ -38,6 +40,7 @@ CONTEXT_WIDTH, CONTEXT_BAND = 220.0, 12.0
 IMAGE_COVERAGE = 0.5  # share of the visible area pictures must cover for the image scan
 IMAGE_SCALE = 3.0  # pixels per point for the image scan
 IMAGE_MAX_PIXELS = 8_000_000  # a larger page is scanned at a lower scale
+IMAGE_MAX_SIDE = 20_000  # pixels on either side, so rounding each side up stays near the budget
 IMAGE_MIN_SCALE = 1.5  # below this a 1-point line is under 2 pixels, and the page is not scanned
 UNDERSCORE_MATCH = 3.0  # points between a line found in the image and an underscore run
 
@@ -158,11 +161,40 @@ def _picture_share(page, view: tuple[float, float, float, float]) -> float:
     return min(covered / area, 1.0) if area > 0 else 0.0
 
 
+def _image_scale(width: float, height: float) -> float | None:
+    """Pixels per point for the image scan, or None below IMAGE_MIN_SCALE. PDFium rounds each side
+    up, so the bitmap holds at most IMAGE_MAX_PIXELS and one more row and column."""
+    if width <= 0 or height <= 0:
+        return None
+    budget = (IMAGE_MAX_PIXELS / (width * height)) ** 0.5
+    scale = min(IMAGE_SCALE, budget, IMAGE_MAX_SIDE / max(width, height))
+    return scale if scale >= IMAGE_MIN_SCALE else None
+
+
+def _apart_from(runs: list, lines: list) -> list:
+    """The lines no underscore run already gives: a run gives a line when their bottoms are within
+    UNDERSCORE_MATCH and they overlap by half the shorter. Runs are looked up by their bottom."""
+    runs = sorted(runs, key=lambda run: run[1])
+    bottoms = [run[1] for run in runs]
+    kept = []
+    for line in lines:
+        left, bottom, right, _ = line
+        first = bisect.bisect_left(bottoms, bottom - UNDERSCORE_MATCH)
+        last = bisect.bisect_right(bottoms, bottom + UNDERSCORE_MATCH)
+        if not any(
+            min(right, run_right) - max(left, run_left)
+            >= 0.5 * min(right - left, run_right - run_left)
+            for run_left, _, run_right, _ in runs[first:last]
+        ):
+            kept.append(line)
+    return kept
+
+
 def _image_shapes(page, view, width: float, height: float, runs: list) -> tuple[list, list, str]:
     """Rules and boxes found in the page's grey pixels, in PDF coordinates like the drawn ones,
     and a note on what the scan found. Lines an underscore run already gives are dropped."""
-    scale = min(IMAGE_SCALE, (IMAGE_MAX_PIXELS / (width * height)) ** 0.5)
-    if scale < IMAGE_MIN_SCALE:
+    scale = _image_scale(width, height)
+    if scale is None:
         return [], [], "the page is too large for the image scan"
     rows, wide, tall, channels = _render(page, scale, grayscale=True)
     if channels != 1:
@@ -183,16 +215,7 @@ def _image_shapes(page, view, width: float, height: float, runs: list) -> tuple[
         left, top, right, bottom = rect
         return (view_left + left, view_top - bottom, view_left + right, view_top - top)
 
-    def underscored(line) -> bool:
-        left, bottom, right, _ = line
-        for run_left, run_bottom, run_right, _ in runs:
-            overlap = min(right, run_right) - max(left, run_left)
-            shorter = min(right - left, run_right - run_left)
-            if abs(bottom - run_bottom) <= UNDERSCORE_MATCH and overlap >= 0.5 * shorter:
-                return True
-        return False
-
-    lines = [line for line in map(placed, shapes.lines) if not underscored(line)]
+    lines = _apart_from(runs, [placed(line) for line in shapes.lines])
     boxes = [placed(box) for box in shapes.boxes]
     note = f"page image scanned: {len(lines)} lines, {len(boxes)} boxes"
     return lines, boxes, "; ".join(filter(None, [note, shapes.note]))
@@ -245,7 +268,8 @@ def _page_candidates(number: int, page) -> PageCandidates:
                 clipped += (min(right, view_right), min(top, view_top))
                 visible.append((kind, clipped, from_image))
         found = visible
-        found.sort(key=lambda item: (-item[1][3], item[1][0]))  # reading order: top, then left
+        # Reading order (top, then left), with what the image gave after the rest.
+        found.sort(key=lambda item: (item[2], -item[1][3], item[1][0]))
         out = []
         for kind, (left, bottom, right, top), from_image in found[:MAX_PER_PAGE]:
             left_text = textpage.get_text_bounded(

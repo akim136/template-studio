@@ -59,8 +59,10 @@ def image_pdf(
     left, bottom, width, height = place or (0, 0, *size)
     draw = b"q %.2f 0 0 %.2f %.2f %.2f cm /Im1 Do Q" % (width, height, left, bottom)
     kids = []
+    step = 4 if in_form else 3  # page, contents, image and, in a form, the form
     for index, (pixels, columns, rows) in enumerate(pictures):
-        page, image, form = 4 + 4 * index, 6 + 4 * index, 7 + 4 * index
+        page = 4 + step * index
+        image, form = page + 2, page + 3
         kids.append(b"%d 0 R" % page)
         data = zlib.compress(pixels)
         objects[image] = (
