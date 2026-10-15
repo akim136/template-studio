@@ -4,5 +4,5 @@
   "features": [
     "F-P4b-release-evidence"
   ],
-  "summary": "Plain storage-failure and bad-PDF messages with internals kept in the server log, one Retry instruction for a save that may have landed, and the page rail filters stacked at 1024 px (validation F-06, F-07, F-11)."
+  "summary": "Plain storage-failure and bad-PDF messages with internals kept in the server log, one Retry instruction for a save that may have landed, the page rail filters stacked at 1024 px (validation F-06, F-07, F-11), and the hosted spend cap raised to $20 (Alex, October 15, 2026)."
 }
