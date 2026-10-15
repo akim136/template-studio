@@ -2,7 +2,7 @@
   "phase": "P4",
   "kind": "feature",
   "features": [
-    "F-P4b-release-evidence"
+    "F-P3-solution-brief"
   ],
-  "summary": "A page call's output cap rises from 6000 to 12000 tokens, so reasoning on a dense page no longer ends in an empty answer and a PARTIAL draft (stage 5 evidence; approved by Alex as its own pull request on October 15, 2026)."
+  "summary": "The solution brief brought up to the release: main 527b3ca with PRs #13–#29 and #31 merged, 698 tests, synthetic-only storage, Sign in with Vercel as identity only, and separate local, preview and production evidence."
 }
