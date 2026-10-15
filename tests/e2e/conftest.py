@@ -6,7 +6,6 @@ directory, so tests never see each other's templates."""
 
 import os
 import re
-import socket
 import subprocess
 import sys
 import time
@@ -39,37 +38,34 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     install(monkeypatch.setattr)
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[str]:
     """The studio in local mode on a loopback port, with no hosted setting in its environment and
-    the loopback-only guard installed in its process."""
-    port = _free_port()
+    the loopback-only guard installed in its process. The server picks and holds its own port."""
     env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG") if name in os.environ}
     env["STUDIO_STATE_DIR"] = str(tmp_path / "state")
-    command = [sys.executable, "-m", "tests.e2e.serve", str(port)]
-    process = subprocess.Popen(command, cwd=ROOT, env=env)
-    base = f"http://127.0.0.1:{port}"
+    command = [sys.executable, "-m", "tests.e2e.serve"]
+    process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
     try:
+        port = process.stdout.readline().strip()
+        if not port.isdigit():
+            raise RuntimeError("the studio did not report its port")
+        base = f"http://127.0.0.1:{port}"
         deadline = time.monotonic() + 20
         while True:
+            if process.poll() is not None or time.monotonic() > deadline:
+                raise RuntimeError("the studio did not start")
             try:
                 with urllib.request.urlopen(f"{base}/healthz", timeout=1) as response:
                     if response.status == 200:
                         break
             except OSError:
-                if process.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError("the studio did not start") from None
                 time.sleep(0.1)
         yield base
     finally:
         process.terminate()
         process.wait(timeout=10)
+        process.stdout.close()
 
 
 @pytest.fixture(scope="session")

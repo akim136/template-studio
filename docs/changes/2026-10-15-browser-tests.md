@@ -26,7 +26,8 @@ cancelled by navigation. Only the studio is reachable:
 - the browser refuses requests to any other origin, navigations included (the pages' content
   security policy already covers fetches);
 - the server runs through `tests/e2e/serve.py`, which installs the loopback-only socket guard
-  (`tests/e2e/guard.py`) in its process;
+  (`tests/e2e/guard.py`) in its process, and binds and reports its own port, so a parallel run
+  cannot answer for it;
 - the suite's own no-network guard is narrowed to the same loopback guard for these tests only.
 
 `tests/e2e/test_guards.py` checks each guard. The checks were also confirmed to fail on purpose:

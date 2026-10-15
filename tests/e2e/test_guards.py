@@ -1,6 +1,7 @@
 """The browser tests' own guards: only the studio is reachable, and a failed request fails the
 test."""
 
+import socket
 import subprocess
 import sys
 
@@ -11,12 +12,12 @@ from playwright.sync_api import Page, expect
 from tests.e2e.conftest import ROOT
 from tests.e2e.test_journey import create_template
 
-# Runs the server module's entry point with uvicorn replaced by an outbound connection attempt.
+# Runs the server module's entry point with the server replaced by an outbound connection attempt.
 PROBE = """
-import runpy, socket, sys
+import runpy, socket, types
 import uvicorn
-sys.argv = ["serve", "0"]
-uvicorn.run = lambda *args, **kwargs: socket.create_connection(("192.0.2.1", 9), timeout=1)
+reach = lambda sockets: socket.create_connection(("192.0.2.1", 9), timeout=1)
+uvicorn.Server = lambda config: types.SimpleNamespace(run=reach)
 runpy.run_module("tests.e2e.serve", run_name="__main__")
 """
 
@@ -45,3 +46,16 @@ def test_the_server_process_refuses_outbound_connections() -> None:
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert result.returncode != 0
     assert "outbound network access attempted" in result.stderr
+
+
+def test_the_server_holds_the_port_it_reports() -> None:
+    command = [sys.executable, "-m", "tests.e2e.serve"]
+    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True)
+    try:
+        port = int(process.stdout.readline())
+        with socket.socket() as other, pytest.raises(OSError):
+            other.bind(("127.0.0.1", port))
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+        process.stdout.close()
