@@ -182,6 +182,8 @@ def test_checkboxes_are_held_to_the_size_limits():
     page = Canvas()
     page.frame(20, 20, 5)
     page.frame(60, 20, 18)
+    page.frame(140, 20, 4.67)  # just under the smallest box
+    page.frame(160, 20, 18.33)  # just over the largest
     page.fill(100, 50, 118, 52)  # an 18-by-21-point frame drawn with 2-point sides
     page.fill(100, 69, 118, 71)
     page.fill(100, 50, 102, 71)
@@ -203,3 +205,10 @@ def test_a_page_of_box_edges_stops_after_a_bounded_number_of_checks(monkeypatch)
     assert (found.lines, found.boxes) == ([], [])
     assert found.note == "image scan stopped after 500 box checks; nothing is reported"
     assert len(checks) <= 500
+
+
+@pytest.mark.parametrize("scale", [2.0, 3.0])
+def test_a_small_box_with_heavy_sides_is_not_closed_up_by_gap_bridging(scale):
+    page = Canvas(scale)
+    page.frame(20, 20, 5, stroke=2)  # one point of paper inside
+    assert page.find().boxes == [tuple(pytest.approx(v, abs=0.5) for v in (20, 20, 25, 25))]

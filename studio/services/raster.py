@@ -21,12 +21,14 @@ from dataclasses import dataclass, field
 
 LINE_MAX_THICKNESS = 3.0  # points; a thicker band of ink is a bar, not a line
 EDGE_MAX_THICKNESS = 2.0  # points, for a checkbox's sides
-GAP_MAX = 1.0  # points: a break this short in a scanned line is bridged
+GAP_MAX = 0.5  # points: a break this short in a scanned line is bridged (a wider one could
+# close up the inside of a small box with heavy sides)
 SEGMENT_MIN = 2.5  # points: shorter runs (most glyph parts, every side or stroke) are not read
 SEGMENT_INK = 0.8  # share of a bridged run that must be ink
 LINE_COVERAGE = 0.9  # share of a line's span that must be inked
 SLOPE_MAX = 0.035  # about 2 degrees
-EDGE_MATCH = 1.5  # points between the ends of a box's top and bottom edges
+EDGE_MATCH = 1.5  # points between the ends of a box's top and bottom edges, and how much
+# shorter than the box an edge may read
 SIDE_COVERAGE = 0.8  # share of the rows between those edges that each side must ink
 INTERIOR_INK_MAX = 0.6  # a filled square is a bullet, not a box; a ticked box stays a box
 SEGMENT_LIMIT = 200_000  # ink runs read per page at most; past that nothing is reported
@@ -96,7 +98,9 @@ def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
             start, end = match.span()
             if end - start < least:
                 continue
-            inked = [(start + s, start + e) for s, e in _spans(solid, match.group(), 1)]
+            inked = [
+                (start + s, start + e) for s, e in map(re.Match.span, solid.finditer(match.group()))
+            ]
             if sum(e - s for s, e in inked) >= SEGMENT_INK * (end - start):
                 out.append((y, start, end, tuple(inked)))
             else:  # too sparse to bridge: keep its solid runs that are long enough
@@ -104,10 +108,6 @@ def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
             if len(out) > SEGMENT_LIMIT:
                 return [], True
     return out, False
-
-
-def _spans(pattern: re.Pattern[bytes], data: bytes, least: int) -> list[tuple[int, int]]:
-    return [m.span() for m in pattern.finditer(data) if m.end() - m.start() >= least]
 
 
 def _bands(segments: list[Segment], gap: int) -> list[_Band]:
@@ -240,11 +240,11 @@ def find(
             lines.append(rect(band.left, band.centre - half, band.right, band.centre + half))
 
     match, side = EDGE_MATCH * scale, max(2, round(EDGE_MAX_THICKNESS * scale))
-    least, most = (box_min - EDGE_MATCH) * scale, (box_max + EDGE_MATCH) * scale
+    least, most = box_min * scale, box_max * scale  # a box's outer size, as a drawn box's bounds
     edges = [
         band
         for band in bands
-        if least <= band.right - band.left <= most
+        if least - match <= band.right - band.left <= most
         and band.thickness <= side
         and band.coverage >= LINE_COVERAGE
     ]
@@ -272,7 +272,9 @@ def find(
                 continue
             left, right = min(top.left, bottom.left), max(top.right, bottom.right)
             tall, wide = bottom.bottom - top.top, right - left
-            if not least <= tall <= most or wide > most or abs(wide - tall) > box_skew * scale:
+            if not (least <= tall <= most and least <= wide <= most):
+                continue
+            if abs(wide - tall) > box_skew * scale:
                 continue
             if _boxed(ink, left, right, top, bottom, side):
                 boxes.append(rect(left, top.top, right, bottom.bottom))
