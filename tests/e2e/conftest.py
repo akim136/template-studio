@@ -38,12 +38,19 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     install(monkeypatch.setattr)
 
 
+def studio_env(tmp_path: Path) -> dict[str, str]:
+    """An environment for a studio process: local mode on an empty state directory, with no hosted
+    setting and none of the developer's own state."""
+    env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG") if name in os.environ}
+    env["STUDIO_STATE_DIR"] = str(tmp_path / "state")
+    return env
+
+
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[str]:
     """The studio in local mode on a loopback port, with no hosted setting in its environment and
     the loopback-only guard installed in its process. The server picks and holds its own port."""
-    env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG") if name in os.environ}
-    env["STUDIO_STATE_DIR"] = str(tmp_path / "state")
+    env = studio_env(tmp_path)
     command = [sys.executable, "-m", "tests.e2e.serve"]
     process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
     try:

@@ -9,7 +9,7 @@ import pytest
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
-from tests.e2e.conftest import ROOT
+from tests.e2e.conftest import ROOT, studio_env
 from tests.e2e.test_journey import create_template, follow
 
 # Runs the server module's entry point with the server replaced by an outbound connection attempt.
@@ -41,20 +41,30 @@ def test_a_page_image_that_fails_to_load_is_reported(page: Page, errors: list[st
     errors.clear()
 
 
-def test_the_server_process_refuses_outbound_connections() -> None:
+def test_the_server_process_refuses_outbound_connections(tmp_path, monkeypatch) -> None:
+    inherited = tmp_path / "inherited"
+    monkeypatch.setenv("STUDIO_STATE_DIR", str(inherited))
     command = [sys.executable, "-c", PROBE]
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(
+        command, cwd=ROOT, env=studio_env(tmp_path), capture_output=True, text=True, timeout=60
+    )
     assert result.returncode != 0
     assert "outbound network access attempted" in result.stderr
+    assert not inherited.exists()  # the developer's own state is never opened
 
 
-def test_the_server_holds_the_port_it_reports() -> None:
+def test_the_server_holds_the_port_it_reports(tmp_path, monkeypatch) -> None:
+    inherited = tmp_path / "inherited"
+    monkeypatch.setenv("STUDIO_STATE_DIR", str(inherited))
     command = [sys.executable, "-m", "tests.e2e.serve"]
-    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True)
+    process = subprocess.Popen(
+        command, cwd=ROOT, env=studio_env(tmp_path), stdout=subprocess.PIPE, text=True
+    )
     try:
         port = int(process.stdout.readline())
         with socket.socket() as other, pytest.raises(OSError):
             other.bind(("127.0.0.1", port))
+        assert not inherited.exists()
     finally:
         process.terminate()
         process.wait(timeout=10)
