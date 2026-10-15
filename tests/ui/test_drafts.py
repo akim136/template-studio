@@ -412,6 +412,20 @@ def test_a_finished_draft_without_a_recorded_configuration_is_not_applied(book, 
     assert services.templates.get(template["id"])["revision"] == 1
 
 
+def test_a_reopened_unrecorded_draft_says_it_cannot_be_saved(book, template, services):
+    draft = book.start(template["id"], 1, "anonymous")
+    run_to_end(book, template, draft, fake())
+    assert "not_applied" not in book.view(template["id"], draft["id"])  # it recorded its config
+    key = f"templates/{template['id']}/drafts/{draft['id']}/draft.json"
+    stored = services.store.get(key)
+    header = json.loads(stored.data)
+    del header["prompts_sha256"]
+    services.store.replace(key, canonical(header), stored.etag)
+    # the drafting page hides its save button and offers a new draft when the view says why
+    reopened = book.latest(template["id"])
+    assert reopened["state"] == drafts.DRAFTED and reopened["not_applied"] == drafts.UNRECORDED
+
+
 def test_an_unrecorded_draft_whose_apply_landed_is_finished_by_a_retry(book, template, services):
     draft = book.start(template["id"], 1, "anonymous")
     run_to_end(book, template, draft, fake())
@@ -431,6 +445,7 @@ def test_an_unrecorded_draft_whose_apply_landed_is_finished_by_a_retry(book, tem
     header = json.loads(stored.data)
     del header["prompts_sha256"]  # as a draft started before the hash was recorded
     services.store.replace(key, canonical(header), stored.etag)
+    assert "not_applied" not in book.view(template["id"], draft["id"])  # its save landed
     again = book.apply(template["id"], draft["id"], "anonymous")
     assert again["template"]["revision"] == 2 and again["draft"]["state"] == drafts.APPLIED
 
