@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 from app import app
 from studio.state import sources
 from studio.state.store import StorageError
+from studio.state.templates import parse_details
 from studio.ui import pages
+from studio.ui.demo_sponsors import DEMO_SPONSORS
 from tests.state.helpers import POLICY, field, two_page_pdf
 from tests.state.test_hosted import EMAIL, SAME_ORIGIN, uploaded
 from tests.state.test_r2 import CREDENTIALS
@@ -157,6 +159,33 @@ def test_the_setup_page_uploads_through_the_studio_locally(local):
     assert page.status_code == 200
     assert 'data-upload="server"' in page.text
     assert "sample" not in page.text.lower() and "model" not in page.text.lower()
+
+
+def test_the_setup_page_offers_200_demo_customers_from_a_to_z(local):
+    page = local.get("/new")
+    options = re.findall(
+        r'<option value="(demo-\d{5})" data-name="([^"]+)">([^<]+)</option>', page.text
+    )
+    assert len(options) == len(DEMO_SPONSORS) == 200
+    names = [name for _, name, _ in options]
+    assert names == sorted(names, key=str.casefold) and len(set(names)) == 200
+    assert len({account for account, _, _ in options}) == 200
+    assert all(name == label for _, name, label in options)
+    # setup.js sends the picked customer through the same two fields a typed one used
+    assert '<input type="hidden" data-sponsor-name>' in page.text
+    assert re.search(
+        r'<input class="input mono" id="sponsor-id" readonly [^>]*data-sponsor-id>', page.text
+    )
+
+
+def test_every_demo_customer_is_valid_template_details():
+    for name, account in DEMO_SPONSORS:
+        raw = {
+            "title": f"{name} - Subscription",
+            "sponsor_name": name,
+            "sponsor_account_id": account,
+        }
+        assert parse_details(raw) == raw, name
 
 
 def test_setup_requires_only_the_signatures_by_default(local):

@@ -2,7 +2,7 @@
   "phase": "P4",
   "kind": "feature",
   "features": [
-    "F-P3-solution-brief"
+    "F-P4b-release-evidence"
   ],
-  "summary": "The brief's head-to-head line corrected: the trials have finished; the write-up and model decision are pending."
+  "summary": "Demo draft: setup's sponsor account step picks from 200 fictional demo customers with fixed account IDs, sorted A to Z; the saved details, default title and summary are unchanged."
 }
