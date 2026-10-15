@@ -1,8 +1,11 @@
 """Checkbox glyphs in the text layer, including symbol fonts that carry no Unicode mapping."""
 
+import ctypes
+
+import pypdfium2 as pdfium
 import pytest
 
-from studio.services.candidates import extract_candidates
+from studio.services.candidates import _font_family, extract_candidates
 from tests.analysis.pdf_factory import from_objects
 
 WIDTHS = b"[" + b" ".join(b"1000" for _ in range(256)) + b"]"
@@ -78,3 +81,10 @@ def test_a_symbol_font_box_mapped_to_the_private_use_area_is_a_box():
 )
 def test_the_same_codes_in_other_fonts_are_not_boxes(font, code):
     assert boxes(glyph_page(font, code)) == []
+
+
+def test_a_font_name_longer_than_the_buffer_names_no_family():
+    # PDFium writes nothing when a name does not fit, so what the buffer held before is not read.
+    textpage = pdfium.PdfDocument(glyph_page(b"Wingdings2", 0xA3))[0].get_textpage()
+    assert _font_family(textpage, 0, ctypes.create_string_buffer(256)) == "wingdings2"
+    assert _font_family(textpage, 0, ctypes.create_string_buffer(b"Symbol", 8)) == ""

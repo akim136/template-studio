@@ -100,7 +100,9 @@ def _font_family(textpage, index: int, name) -> str:
     """The character's font name without a subset prefix or style, in lower case and without
     spaces: "ABCDEF+Wingdings2", "Wingdings 2" and "Wingdings2-Regular" all give "wingdings2"."""
     length = pdfium_raw.FPDFText_GetFontInfo(textpage.raw, index, name, len(name), None)
-    text = name.raw[: max(length - 1, 0)].decode("latin-1").rsplit("+", 1)[-1]
+    if not 0 < length <= len(name):  # PDFium writes nothing when the name does not fit
+        return ""
+    text = name.raw[: length - 1].decode("latin-1").rsplit("+", 1)[-1]
     return re.sub(r"[-,].*", "", text).replace(" ", "").lower()
 
 
