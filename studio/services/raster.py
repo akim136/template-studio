@@ -44,7 +44,7 @@ RING_INK = 0.2  # share of each side of that band that may be ink; a letter's ne
 CORNER = 0.5  # points: where each side's stroke meets the top and bottom, there is ink this close
 # to the corner, as in a square and not in a rounded letter
 SEGMENT_LIMIT = 400_000  # runs of ink read per page at most; past that nothing is reported.
-# The busiest scanned page in the October 15, 2026 evaluation read about 118,000.
+# The busiest scanned page in the October 15, 2026 evaluation had about 109,000.
 PAIR_LIMIT = 100_000  # pairs of edges tried as a box's top and bottom; past that, likewise
 SAMPLE_STEP = 8  # every 8th pixel of every row makes the grey-level histogram, so no run of
 # 8 pixels is missed
@@ -101,27 +101,23 @@ def ink_threshold(rows: list[bytes]) -> int:
 
 def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
     """Each horizontal ink run long enough to read, with short breaks bridged, and the inked
-    spans inside it; the flag is set once more than SEGMENT_LIMIT runs of ink were read: every
-    run found, short or not, and each solid run inside a long one."""
+    spans inside it; the flag is set once the rows read so far hold more than SEGMENT_LIMIT runs
+    of ink. Each row's runs are counted before it is read, each run once, so the regular
+    expressions make at most twice that many matches."""
     gap = round(GAP_MAX * scale)  # pixels
     least = max(2, math.ceil(SEGMENT_MIN * scale))
     solid = re.compile(rb"\x01+")
     bridged = re.compile(rb"\x01+(?:\x00{1,%d}\x01+)*" % gap) if gap else solid
     out, read = [], 0
     for y, row in enumerate(ink):
+        read += row.count(b"\x00\x01") + row.startswith(b"\x01")  # where each run starts
+        if read > SEGMENT_LIMIT:
+            return [], True
         for match in bridged.finditer(row):
-            read += 1
-            if read > SEGMENT_LIMIT:
-                return [], True
             start, end = match.span()
             if end - start < least:
                 continue
-            inked = []
-            for run in solid.finditer(row, start, end):
-                read += 1
-                if read > SEGMENT_LIMIT:
-                    return [], True
-                inked.append(run.span())
+            inked = [run.span() for run in solid.finditer(row, start, end)]
             if sum(e - s for s, e in inked) >= SEGMENT_INK * (end - start):
                 out.append((y, start, end, tuple(inked)))
             else:  # too sparse to bridge: keep its solid runs that are long enough
