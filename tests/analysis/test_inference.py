@@ -504,6 +504,14 @@ def test_each_page_call_is_reserved_at_the_size_of_the_image_sent(tmp_path, monk
     assert seen[1:] == [[tuple(form)], [tuple(form)], [tuple(prose)]]  # page 1 A and B, page 2 A
 
 
+def test_each_page_call_leaves_room_to_reason_before_it_answers(tmp_path):
+    fake = FakeGateway()
+    run(tmp_path, fake, config=SERIAL)
+    sent = [body["max_tokens"] for body in fake.chat_bodies()]
+    assert sent == [inference.PREFLIGHT_OUTPUT_TOKENS] + [inference.MAX_OUTPUT_TOKENS] * 3
+    assert inference.MAX_OUTPUT_TOKENS >= 12000  # 6000 ran out in reasoning on dense pages
+
+
 def test_the_cli_passes_an_accepted_fallback_and_refuses_it_off_byok(tmp_path, monkeypatch):
     code, _, out = cli(tmp_path, monkeypatch, "--accept-fallback")
     assert json.loads(out.read_text())["route"]["accept_fallback"] is True
