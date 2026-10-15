@@ -1,6 +1,8 @@
 {
   "phase": "P4",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Add F-P4c-scanned-pages (Alex, October 15, 2026): candidates found in the image of a scanned page, and model boxes snapped onto them, built as local stacked branches."
+  "kind": "feature",
+  "features": [
+    "F-P4c-scanned-pages"
+  ],
+  "summary": "Scanned pages (1): a plain-Python detector of lines and checkbox squares in a page's grey pixels (studio/services/raster.py), with its tests. Not wired in yet."
 }
