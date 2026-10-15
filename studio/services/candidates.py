@@ -5,7 +5,7 @@ drawn or glyph squares (checkbox shapes). A candidate is a place a field might g
 the model decides which candidates are fields and may propose fields that have no candidate.
 
 A scanned page has no drawn rules or squares, only a picture. A page whose pictures cover at least
-IMAGE_COVERAGE of its visible area, and which gives no drawn rule, drawn square or glyph square, is
+IMAGE_COVERAGE of its visible area, and which shows no drawn rule, drawn square or glyph square, is
 rendered in grey and its lines and squares are found in the pixels (`raster`), held to the same
 sizes. They become rules and boxes like the drawn ones, marked `from_image`; a line found where the
 text layer already has an underscore run is left to the underscore. They are numbered after the
@@ -134,8 +134,8 @@ def _paths(page, limit: int) -> tuple[list, list, bool]:
     return rules, boxes, False
 
 
-def _area_within(obj, view: tuple[float, float, float, float]) -> float:
-    left, bottom, right, top = obj.get_bounds()
+def _area_within(bounds, view: tuple[float, float, float, float]) -> float:
+    left, bottom, right, top = bounds
     view_left, view_bottom, view_right, view_top = view
     wide = min(right, view_right) - max(left, view_left)
     tall = min(top, view_top) - max(bottom, view_bottom)
@@ -143,22 +143,24 @@ def _area_within(obj, view: tuple[float, float, float, float]) -> float:
 
 
 def _picture_share(page, view: tuple[float, float, float, float]) -> tuple[float, bool]:
-    """Share of the visible area under pictures: each top-level image, and each top-level form
-    that draws one, by its bounds on the page (overlaps are not removed; at most 1). Reads at most
-    PATH_SCAN_LIMIT objects; the flag is set if more remain unread."""
+    """Share of the visible area under pictures: each top-level image, and each image a top-level
+    form draws, by its own bounds on the page (overlaps are not removed; at most 1). A form's
+    other content does not count. Reads at most PATH_SCAN_LIMIT objects; the flag is set if more
+    remain unread."""
     view_left, view_bottom, view_right, view_top = view
     area = (view_right - view_left) * (view_top - view_bottom)
-    covered, current, pictured, stopped = 0.0, None, False, False
+    covered, form, stopped = 0.0, None, False
     for read, obj in enumerate(page.get_objects(max_depth=2)):
         if read == PATH_SCAN_LIMIT:
             stopped = True
             break
-        if obj.level == 0:  # a new top-level object: count the one before if it was a picture
-            covered += _area_within(current, view) if pictured else 0.0
-            current, pictured = obj, obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE
-        elif obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
-            pictured = True  # a form that draws a picture counts by its own bounds
-    covered += _area_within(current, view) if pictured else 0.0
+        if obj.level == 0:
+            form = obj.get_matrix() if obj.type == pdfium_raw.FPDF_PAGEOBJ_FORM else None
+            if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+                covered += _area_within(obj.get_bounds(), view)
+        elif obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE and form is not None:
+            # A form's objects report bounds in the form's space; its matrix places them.
+            covered += _area_within(form.on_rect(*obj.get_bounds()), view)
     return (min(covered / area, 1.0) if area > 0 else 0.0), stopped
 
 
@@ -251,7 +253,14 @@ def _page_candidates(number: int, page) -> PageCandidates:
         found += [("rule", box, False) for box in rules[:SCAN_LIMIT]]
         found += [("box", box, False) for box in (boxes[:SCAN_LIMIT] + glyphs[:SCAN_LIMIT])]
         view = (view_left, view_bottom, view_right, view_top)
-        if not (rules or boxes or glyphs or unread):
+
+        def shown(rect) -> bool:
+            left, bottom, right, top = rect
+            return (
+                right > view_left and left < view_right and top > view_bottom and bottom < view_top
+            )
+
+        if not (unread or any(shown(rect) for rect in rules + boxes + glyphs)):
             try:  # the picture check and the scan: the page keeps what its text layer gave
                 share, stopped = _picture_share(page, view)
                 if share >= IMAGE_COVERAGE:
@@ -268,7 +277,7 @@ def _page_candidates(number: int, page) -> PageCandidates:
                 notes.append(note)
         visible = []  # only what is visible, clipped to the visible area
         for kind, (left, bottom, right, top), from_image in found:
-            if right > view_left and left < view_right and top > view_bottom and bottom < view_top:
+            if shown((left, bottom, right, top)):
                 clipped = (max(left, view_left), max(bottom, view_bottom))
                 clipped += (min(right, view_right), min(top, view_top))
                 visible.append((kind, clipped, from_image))

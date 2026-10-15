@@ -1,9 +1,12 @@
 import math
 import random
 
+import pypdfium2 as pdfium
 import pytest
 
 from studio.services import raster
+from studio.services.render import _render
+from tests.analysis.pdf_factory import make_pdf
 
 PAPER, INK = 255, 0
 LIMITS = {"line_min": 36.0, "box_min": 5.0, "box_max": 18.0, "box_skew": 3.0}
@@ -207,7 +210,7 @@ def test_a_page_of_box_edges_stops_after_a_bounded_number_of_checks(monkeypatch)
     assert len(checks) <= 500
 
 
-@pytest.mark.parametrize("scale", [2.0, 3.0])
+@pytest.mark.parametrize("scale", [1.0, 2.0, 3.0])
 def test_a_small_box_with_heavy_sides_is_not_closed_up_by_gap_bridging(scale):
     page = Canvas(scale)
     page.frame(20, 20, 5, stroke=2)  # one point of paper inside
@@ -222,6 +225,14 @@ def test_every_run_of_ink_counts_toward_the_limit_even_inside_a_bridged_run(monk
     assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
 
 
+def test_short_runs_of_ink_count_toward_the_limit_too(monkeypatch):
+    monkeypatch.setattr(raster, "SEGMENT_LIMIT", 50)
+    specks = b"\x00\xff\xff\xff\xff\xff" * 60  # 60 one-pixel specks, too far apart to bridge
+    rows = [specks] + [b"\xff" * 360] * 9
+    found = raster.find(rows, 360, 10, 3.0, **LIMITS)
+    assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
+
+
 @pytest.mark.parametrize("top", [119, 119.34, 119.67, 120])
 def test_a_faint_rule_is_found_whichever_rows_it_falls_on(top):
     page = Canvas()
@@ -233,3 +244,85 @@ def test_heavy_box_sides_are_not_read_as_runs_at_one_pixel_per_point():
     page = Canvas(scale=1.0)
     page.frame(20, 20, 10, stroke=2)
     assert page.find().boxes == [(20, 20, 30, 30)]
+
+
+WORDS = b"Board Order Dated DOB D.O.B. HOME Hello DD OO BB 88 00 @ & Bob Dad Odd abode bad dog"
+CHECKBOXES = [
+    (72, 600, 9, b""),
+    (150, 600, 9, b"72 600 m"),
+    (228, 600, 12, b""),
+    (320, 597, 6, b""),
+]
+
+
+def test_words_beside_checkboxes_give_only_the_checkboxes():
+    content = [
+        b"BT /F1 %d Tf 40 %d Td (%s) Tj ET" % (size, 760 - 30 * k, WORDS)
+        for k, size in enumerate(range(8, 13))
+    ]
+    for left, bottom, size, _ in CHECKBOXES:  # each with its label 3 points to its right
+        content.append(b"0 0 0 RG 0.75 w %d %d %d %d re S" % (left, bottom, size, size))
+        content.append(b"BT /F1 9 Tf %d %d Td (Yes) Tj ET" % (left + size + 3, bottom + 1))
+    content.append(b"0 0 0 RG 1 w 152 603 m 154 601 l 159 607 l S")  # a tick in the second box
+    pdf = pdfium.PdfDocument(make_pdf([b"\n".join(content)]))
+    try:
+        for dpi in (150, 200, 300):
+            scale = dpi / 72
+            rows, wide, tall, _ = _render(pdf[0], scale, grayscale=True)
+            found = raster.find(rows, wide, tall, scale, **LIMITS).boxes
+            centres = sorted(
+                ((left + right) / 2, (top + bottom) / 2) for left, top, right, bottom in found
+            )
+            expected = sorted(
+                (left + size / 2, 792 - bottom - size / 2) for left, bottom, size, _ in CHECKBOXES
+            )
+            assert centres == [tuple(pytest.approx(v, abs=1) for v in c) for c in expected], dpi
+    finally:
+        pdf.close()
+
+
+def test_a_square_with_a_bar_across_it_is_a_letter_not_a_checkbox():
+    page = Canvas()
+    page.fill(100, 50, 106, 50.8)  # an "H" with serifs: its stems sit inside the serifs' ends
+    page.fill(100, 56, 106, 56.8)
+    page.fill(100.4, 50, 101.4, 56.8)
+    page.fill(104.6, 50, 105.6, 56.8)
+    page.fill(100.4, 52.8, 105.6, 53.8)  # the bar
+    assert page.find().boxes == []
+
+
+def test_squares_touching_other_ink_are_letters_not_checkboxes():
+    page = Canvas()
+    page.frame(100, 50, 6, stroke=1.2)  # a square "8": two bowls on one shared stroke
+    page.frame(100, 54.8, 6, stroke=1.2)
+    page.frame(150, 50, 7, stroke=1.2)  # a square "o" with the next letter's stem beside it
+    page.fill(157.5, 50, 158.7, 57)
+    assert page.find().boxes == []
+
+
+def test_a_square_whose_side_bends_is_a_letter_not_a_checkbox():
+    page = Canvas()
+    page.fill(100, 50, 110, 51)  # top
+    page.fill(100, 59, 110, 60)  # bottom
+    page.fill(100, 50, 101, 60)  # a straight stem
+    page.fill(109.5, 50, 110, 55)  # the other side starts at the edge and steps inward
+    page.fill(108, 55, 108.5, 60)
+    assert page.find().boxes == []
+
+
+def test_a_square_whose_top_and_bottom_differ_in_length_is_not_a_checkbox():
+    page = Canvas()
+    page.fill(100, 50, 105, 51)  # top
+    page.fill(100, 57, 106.2, 58)  # a longer bottom
+    page.fill(100, 50, 101, 58)  # the stem
+    page.fill(105.2, 51.6, 106.2, 58)  # a side that starts below the top: a rounded corner
+    assert page.find().boxes == []
+
+
+def test_a_checkbox_close_to_its_label_and_marked_inside_is_still_found():
+    page = Canvas()
+    page.frame(100, 50, 10)
+    page.fill(111.5, 51, 112.5, 59)  # a label's first stroke, 1.5 points away
+    page.frame(150, 50, 10)
+    page.fill(153, 53, 157, 57)  # a filled dot inside
+    assert len(page.find().boxes) == 2

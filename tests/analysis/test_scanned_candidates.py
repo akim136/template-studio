@@ -49,6 +49,32 @@ def test_a_small_picture_does_not_make_a_page_a_scan():
     assert (page.candidates, page.reason) == ([], "")
 
 
+def test_a_small_picture_in_a_form_of_other_content_does_not_make_a_page_a_scan():
+    frame = b"0 0 0 RG 1 w 20 20 572 752 re S"  # drawn by the same form, around the whole page
+    found = extract_candidates(
+        scanned(form, in_form=True, place=(72, 500, 200, 260), form_extra=frame)
+    )[0]
+    assert (found.candidates, found.reason) == ([], "")
+
+
+def test_a_picture_drawn_by_a_moved_form_counts_where_it_lands():
+    drawn, shrunk = b"/Fm1 Do\n", b"q 0.25 0 0 0.25 0 0 cm /Fm1 Do Q\n"  # into a 6% corner
+    page = scanned(form, in_form=True).replace(
+        b"/Length 8 >>\nstream\n" + drawn, b"/Length %d >>\nstream\n%s" % (len(shrunk), shrunk)
+    )
+    assert shrunk in page
+    assert extract_candidates(page)[0].candidates == []
+
+
+def test_a_drawn_rule_outside_the_visible_area_does_not_stop_the_image_scan():
+    def crop(page):
+        page.cropbox = RectangleObject([50, 100, 562, 742])
+
+    hidden = b"0 0 0 RG 1 w 72 40 m 272 40 l S"  # under the crop box
+    found = extract_candidates(edited(scanned(form, text=hidden), crop))[0]
+    assert [(c.kind, c.from_image) for c in found.candidates] == [("rule", True), ("box", True)]
+
+
 def test_a_page_with_a_drawn_rule_keeps_only_what_is_drawn():
     page = extract_candidates(scanned(form, text=b"0 0 0 RG 1 w 72 400 m 272 400 l S"))[0]
     assert [(c.kind, c.from_image, c.y) for c in page.candidates] == [("rule", False, 391.0)]

@@ -6,6 +6,10 @@ expression finds the ink runs in each row. Runs in adjacent rows that touch are 
 scanned with a slight skew is read as one staircase; a page skewed by more than about 2 degrees
 is not deskewed, and its lines are not found.
 
+A checkbox is a top and a bottom edge joined by two straight sides. Letters such as B, D, H, O
+and 8 can read the same way, so a box must also be clear of other ink just outside it, ink all
+four corners, and have no solid bar of ink across its inside.
+
 Rectangles are (left, top, right, bottom) in points with a top-left origin, measured over the
 rendered area. The callers' shape thresholds are passed in, so a line or box found here is held to
 the same sizes as a drawn one.
@@ -22,7 +26,7 @@ from dataclasses import dataclass, field
 LINE_MAX_THICKNESS = 3.0  # points; a thicker band of ink is a bar, not a line
 EDGE_MAX_THICKNESS = 2.0  # points, for a checkbox's sides
 GAP_MAX = 0.5  # points: a break this short in a scanned line is bridged (a wider one could
-# close up the inside of a small box with heavy sides)
+# close up the inside of a small box with heavy sides); none is when that is under one pixel
 SEGMENT_MIN = 2.5  # points: shorter runs (most glyph parts, every side or stroke) are not read
 SEGMENT_INK = 0.8  # share of a bridged run that must be ink
 LINE_COVERAGE = 0.9  # share of a line's span that must be inked
@@ -30,8 +34,17 @@ SLOPE_MAX = 0.035  # about 2 degrees
 EDGE_MATCH = 1.5  # points between the ends of a box's top and bottom edges, and how much
 # shorter than the box an edge may read
 SIDE_COVERAGE = 0.8  # share of the rows between those edges that each side must ink
+SIDE_WINDOW = 1.0  # points: each side inks those rows within one column this wide, as a
+# straight stroke does even scanned with a slight skew; a letter's curved side does not
 INTERIOR_INK_MAX = 0.6  # a filled square is a bullet, not a box; a ticked box stays a box
-SEGMENT_LIMIT = 200_000  # runs of ink read per page at most; past that nothing is reported
+BAR_SPAN = 0.6  # a row inked solid across this share of a box's width, sides included, is a
+# letter's bar (as in H, B or 8); a tick, a cross or a dot leaves a gap
+RING = 1.0  # points: the band just outside a box, one pixel off it, that must be nearly clear
+RING_INK = 0.2  # share of each side of that band that may be ink; a letter's neighbours ink more
+CORNER = 0.5  # points: where each side's stroke meets the top and bottom, there is ink this close
+# to the corner, as in a square and not in a rounded letter
+SEGMENT_LIMIT = 400_000  # runs of ink read per page at most; past that nothing is reported.
+# The busiest scanned page in the October 15, 2026 evaluation read about 118,000.
 PAIR_LIMIT = 100_000  # pairs of edges tried as a box's top and bottom; past that, likewise
 SAMPLE_STEP = 8  # every 8th pixel of every row makes the grey-level histogram, so no run of
 # 8 pixels is missed
@@ -88,14 +101,18 @@ def ink_threshold(rows: list[bytes]) -> int:
 
 def _segments(ink: list[bytes], scale: float) -> tuple[list[Segment], bool]:
     """Each horizontal ink run long enough to read, with short breaks bridged, and the inked
-    spans inside it; the flag is set once more than SEGMENT_LIMIT runs of ink were read."""
-    gap = max(1, round(GAP_MAX * scale))
+    spans inside it; the flag is set once more than SEGMENT_LIMIT runs of ink were read: every
+    run found, short or not, and each solid run inside a long one."""
+    gap = round(GAP_MAX * scale)  # pixels
     least = max(2, math.ceil(SEGMENT_MIN * scale))
-    bridged = re.compile(rb"\x01+(?:\x00{1,%d}\x01+)*" % gap)
     solid = re.compile(rb"\x01+")
+    bridged = re.compile(rb"\x01+(?:\x00{1,%d}\x01+)*" % gap) if gap else solid
     out, read = [], 0
     for y, row in enumerate(ink):
         for match in bridged.finditer(row):
+            read += 1
+            if read > SEGMENT_LIMIT:
+                return [], True
             start, end = match.span()
             if end - start < least:
                 continue
@@ -182,18 +199,68 @@ def _measure(group: list[Segment]) -> _Band:
     )
 
 
-def _boxed(ink: list[bytes], left: int, right: int, top: _Band, bottom: _Band, side: int) -> bool:
-    """Whether both sides are inked between the two edges, and the inside is not filled."""
+def _straight(rows: list[bytes], start: int, end: int, window: int) -> float:
+    """The largest share of rows that ink one window of columns between start and end: a straight
+    side inks the same columns in every row, a curve moves across them."""
+    best = 0
+    for x in range(start, max(start, end - window) + 1):
+        best = max(best, sum(1 for row in rows if 1 in row[x : x + window]))
+    return best / len(rows)
+
+
+def _outer(rows: list[bytes], columns: range) -> int:
+    """The first of these columns that at least half the rows ink: where a side's stroke starts,
+    seen from outside the box. A speck of noise joined onto an edge's end does not move it."""
+    least = len(rows) / 2
+    return next((x for x in columns if sum(row[x] for row in rows) >= least), columns[0])
+
+
+def _clear(band: list[bytes]) -> bool:
+    """Whether at most RING_INK of a band of pixels is ink; an empty band is clear."""
+    total = sum(map(len, band))
+    return not total or sum(part.count(1) for part in band) <= RING_INK * total
+
+
+def _boxed(
+    ink: list[bytes], left: int, right: int, top: _Band, bottom: _Band, sizes: tuple[int, ...]
+) -> bool:
+    """Whether both sides are straight and inked between the two edges, the inside is neither
+    filled nor crossed by a solid bar, all four corners are inked, and the ink around the box is
+    sparse. sizes are the side, side window, ring and corner sizes in pixels."""
+    side, window, ring, corner = sizes
     rows = ink[top.bottom : bottom.top]
     if not rows or right - left <= 2 * side:
         return False
-    least = SIDE_COVERAGE * len(rows)
-    if sum(1 for row in rows if 1 in row[left : left + side]) < least:
+    if _straight(rows, left, left + side, window) < SIDE_COVERAGE:
         return False
-    if sum(1 for row in rows if 1 in row[right - side : right]) < least:
+    if _straight(rows, right - side, right, window) < SIDE_COVERAGE:
         return False
     inside = [row[left + side : right - side] for row in rows]
-    return sum(part.count(1) for part in inside) < INTERIOR_INK_MAX * sum(map(len, inside))
+    if sum(part.count(1) for part in inside) >= INTERIOR_INK_MAX * sum(map(len, inside)):
+        return False
+    for row in rows:
+        part = row[left:right]
+        first, last = part.find(1), part.rfind(1)
+        if (
+            first >= 0
+            and last - first + 1 >= BAR_SPAN * len(part)
+            and 0 not in part[first : last + 1]
+        ):
+            return False
+    upper, lower = top.top, bottom.bottom
+    near = _outer(rows, range(left, left + side))
+    far = _outer(rows, range(right - 1, right - side - 1, -1)) + 1
+    for ys in (range(upper, upper + corner), range(lower - corner, lower)):
+        for start in (near, far - corner):
+            if not any(1 in ink[y][start : start + corner] for y in ys):
+                return False
+    # The ring starts a pixel off the box, so a slightly blurred edge is not counted as its ink.
+    return (
+        _clear([row[left:right] for row in ink[max(0, upper - 1 - ring) : max(0, upper - 1)]])
+        and _clear([row[left:right] for row in ink[lower + 1 : lower + 1 + ring]])
+        and _clear([row[max(0, left - 1 - ring) : max(0, left - 1)] for row in rows])
+        and _clear([row[right + 1 : right + 1 + ring] for row in rows])
+    )
 
 
 def find(
@@ -242,6 +309,7 @@ def find(
             lines.append(rect(band.left, band.centre - half, band.right, band.centre + half))
 
     match, side = EDGE_MATCH * scale, max(2, round(EDGE_MAX_THICKNESS * scale))
+    sizes = (side, *(max(2, round(points * scale)) for points in (SIDE_WINDOW, RING, CORNER)))
     least, most = box_min * scale, box_max * scale  # a box's outer size, as a drawn box's bounds
     edges = [
         band
@@ -278,7 +346,7 @@ def find(
                 continue
             if abs(wide - tall) > box_skew * scale:
                 continue
-            if _boxed(ink, left, right, top, bottom, side):
+            if _boxed(ink, left, right, top, bottom, sizes):
                 boxes.append(rect(left, top.top, right, bottom.bottom))
                 break
     return Shapes(
