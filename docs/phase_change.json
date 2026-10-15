@@ -4,5 +4,5 @@
   "features": [
     "F-P4b-release-evidence"
   ],
-  "summary": "Pages a partial AI draft left unchecked carry forward and block approval until the review confirms each as checked by hand; the review confirmation covers every page (validation F-03, F-05)."
+  "summary": "A draft records its route and a hash of its prompts, and stops before sending anything when either changes after it started (validation F-02)."
 }
