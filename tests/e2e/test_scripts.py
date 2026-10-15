@@ -58,6 +58,6 @@ def test_leaving_the_editor_asks_first_only_with_unsaved_changes(page: Page) -> 
 
     page.click("button[data-save]")
     page.wait_for_selector("[data-save-label]:text-is('Saved')")
-    page.close(run_before_unload=True)
-    page.wait_for_event("close")
+    with page.expect_event("close"):
+        page.close(run_before_unload=True)
     assert asked == ["beforeunload"]
