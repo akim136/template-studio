@@ -1,6 +1,7 @@
 """Build small synthetic PDFs at test time. No PDF fixture is committed."""
 
 import io
+import zlib
 
 
 def _escape(text: str) -> bytes:
@@ -37,6 +38,54 @@ def make_pdf(texts: list[str | bytes], *, size=(612, 792), bad_startxref: bool =
         )
         objects[page + 1] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
     return from_objects(objects, bad_startxref=bad_startxref)
+
+
+def image_pdf(
+    pictures: list[tuple[bytes, int, int]],
+    *,
+    size=(612, 792),
+    place: tuple[float, float, float, float] | None = None,
+    text: bytes = b"",
+    in_form: bool = False,
+) -> bytes:
+    """One page per picture, as a scanner writes them: 8-bit grey pixels (rows top to bottom,
+    width by height) drawn over ``place`` (left, bottom, width, height in points; default: the
+    whole page). ``text`` is added to the page's content, such as an invisible OCR layer, and
+    ``in_form`` draws the picture from inside a form XObject."""
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    left, bottom, width, height = place or (0, 0, *size)
+    draw = b"q %.2f 0 0 %.2f %.2f %.2f cm /Im1 Do Q" % (width, height, left, bottom)
+    kids = []
+    for index, (pixels, columns, rows) in enumerate(pictures):
+        page, image, form = 4 + 4 * index, 6 + 4 * index, 7 + 4 * index
+        kids.append(b"%d 0 R" % page)
+        data = zlib.compress(pixels)
+        objects[image] = (
+            b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray "
+            b"/BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream"
+            % (columns, rows, len(data), data)
+        )
+        pictures_used = b"/Im1 %d 0 R" % image
+        if in_form:
+            objects[form] = (
+                b"<< /Type /XObject /Subtype /Form /BBox [0 0 %d %d] /Resources << /XObject "
+                b"<< %s >> >> /Length %d >>\nstream\n%s\nendstream"
+                % (*size, pictures_used, len(draw), draw)
+            )
+            pictures_used, stream = b"/Fm1 %d 0 R" % form, b"/Fm1 Do\n" + text
+        else:
+            stream = draw + b"\n" + text
+        objects[page] = (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Resources << /Font "
+            b"<< /F1 3 0 R >> /XObject << %s >> >> /Contents %d 0 R >>"
+            % (*size, pictures_used, page + 1)
+        )
+        objects[page + 1] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
+    objects[2] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (b" ".join(kids), len(kids))
+    return from_objects(objects)
 
 
 def shared_tree_pdf(depth: int) -> bytes:

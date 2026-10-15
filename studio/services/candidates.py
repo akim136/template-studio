@@ -4,6 +4,12 @@ Three mechanical sources: underscore runs in the text layer, drawn horizontal ru
 drawn or glyph squares (checkbox shapes). A candidate is a place a field might go, not a field:
 the model decides which candidates are fields and may propose fields that have no candidate.
 
+A scanned page has no drawn rules or squares, only a picture. A page whose pictures cover at least
+IMAGE_COVERAGE of its visible area, and which gives no drawn rule, drawn square or glyph square, is
+rendered in grey and its lines and squares are found in the pixels (`raster`), held to the same
+sizes. They become rules and boxes like the drawn ones, marked `from_image`; a line found where the
+text layer already has an underscore run is left to the underscore.
+
 Coordinates are source points with a top-left origin, measured from the page's visible area (the
 crop box within the media box), which is the area PDFium renders. Rotated pages are not read.
 Each shape reader stops after SCAN_LIMIT shapes, and the page then says so. What is read is bounded
@@ -18,7 +24,8 @@ from dataclasses import dataclass
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
 
-from studio.services.render import _LOCK
+from studio.services import raster
+from studio.services.render import _LOCK, _render
 
 MAX_PER_PAGE = 120  # beyond this the page is reported as truncated, never silently cut
 SCAN_LIMIT = 2000  # shapes of one kind read per page at most
@@ -28,6 +35,11 @@ BOX_GLYPHS = frozenset("\u2610\u25a1\u25a2\u2751\u2752\uf06f\uf0a8\uf071")  # la
 RULE_MIN_WIDTH, RULE_MAX_HEIGHT = 36.0, 2.0
 BOX_MIN, BOX_MAX, BOX_SKEW = 5.0, 18.0, 3.0
 CONTEXT_WIDTH, CONTEXT_BAND = 220.0, 12.0
+IMAGE_COVERAGE = 0.5  # share of the visible area pictures must cover for the image scan
+IMAGE_SCALE = 3.0  # pixels per point for the image scan
+IMAGE_MAX_PIXELS = 8_000_000  # a larger page is scanned at a lower scale
+IMAGE_MIN_SCALE = 1.5  # below this a 1-point line is under 2 pixels, and the page is not scanned
+UNDERSCORE_MATCH = 3.0  # points between a line found in the image and an underscore run
 
 
 @dataclass(frozen=True)
@@ -42,6 +54,7 @@ class Candidate:
     left_text: str  # text just left of the candidate on the same line
     right_text: str  # text just right of it (checkbox labels usually sit here)
     below_text: str  # text in a band under the candidate (labels such as "Signature")
+    from_image: bool = False  # found in the pixels of a scanned page, not among its objects
 
 
 @dataclass(frozen=True)
@@ -49,7 +62,8 @@ class PageCandidates:
     page: int
     candidates: list[Candidate]
     truncated_from: int | None = None  # the full count when MAX_PER_PAGE cut the list
-    reason: str = ""  # why candidates could not be read, or why the scan stopped
+    reason: str = ""  # why candidates could not be read, why the scan stopped, or what the
+    # image scan of a scanned page found
     width_pt: float = 0.0  # the visible area as PDFium renders it; 0 when unmeasured
     height_pt: float = 0.0
     rotation: int = 0
@@ -117,6 +131,73 @@ def _paths(page, limit: int) -> tuple[list, list, bool]:
     return rules, boxes, False
 
 
+def _area_within(obj, view: tuple[float, float, float, float]) -> float:
+    left, bottom, right, top = obj.get_bounds()
+    view_left, view_bottom, view_right, view_top = view
+    wide = min(right, view_right) - max(left, view_left)
+    tall = min(top, view_top) - max(bottom, view_bottom)
+    return max(wide, 0.0) * max(tall, 0.0)
+
+
+def _picture_share(page, view: tuple[float, float, float, float]) -> float:
+    """Share of the visible area under pictures: each top-level image, and each top-level form
+    that draws one, by its bounds on the page (overlaps are not removed; at most 1). Reads at most
+    PATH_SCAN_LIMIT objects."""
+    view_left, view_bottom, view_right, view_top = view
+    area = (view_right - view_left) * (view_top - view_bottom)
+    covered, current, pictured = 0.0, None, False
+    for read, obj in enumerate(page.get_objects(max_depth=2)):
+        if read == PATH_SCAN_LIMIT:
+            break
+        if obj.level == 0:  # a new top-level object: count the one before if it was a picture
+            covered += _area_within(current, view) if pictured else 0.0
+            current, pictured = obj, obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE
+        elif obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+            pictured = True  # a form that draws a picture counts by its own bounds
+    covered += _area_within(current, view) if pictured else 0.0
+    return min(covered / area, 1.0) if area > 0 else 0.0
+
+
+def _image_shapes(page, view, width: float, height: float, runs: list) -> tuple[list, list, str]:
+    """Rules and boxes found in the page's grey pixels, in PDF coordinates like the drawn ones,
+    and a note on what the scan found. Lines an underscore run already gives are dropped."""
+    scale = min(IMAGE_SCALE, (IMAGE_MAX_PIXELS / (width * height)) ** 0.5)
+    if scale < IMAGE_MIN_SCALE:
+        return [], [], "the page is too large for the image scan"
+    rows, wide, tall, channels = _render(page, scale, grayscale=True)
+    if channels != 1:
+        return [], [], f"the image scan needs grey pixels; PDFium gave {channels} channels"
+    shapes = raster.find(
+        rows,
+        wide,
+        tall,
+        scale,
+        line_min=RULE_MIN_WIDTH,
+        box_min=BOX_MIN,
+        box_max=BOX_MAX,
+        box_skew=BOX_SKEW,
+    )
+    view_left, _, _, view_top = view
+
+    def placed(rect):  # top-left points of the visible area to (left, bottom, right, top)
+        left, top, right, bottom = rect
+        return (view_left + left, view_top - bottom, view_left + right, view_top - top)
+
+    def underscored(line) -> bool:
+        left, bottom, right, _ = line
+        for run_left, run_bottom, run_right, _ in runs:
+            overlap = min(right, run_right) - max(left, run_left)
+            shorter = min(right - left, run_right - run_left)
+            if abs(bottom - run_bottom) <= UNDERSCORE_MATCH and overlap >= 0.5 * shorter:
+                return True
+        return False
+
+    lines = [line for line in map(placed, shapes.lines) if not underscored(line)]
+    boxes = [placed(box) for box in shapes.boxes]
+    note = f"page image scanned: {len(lines)} lines, {len(boxes)} boxes"
+    return lines, boxes, "; ".join(filter(None, [note, shapes.note]))
+
+
 def _page_candidates(number: int, page) -> PageCandidates:
     width, height = page.get_size()  # displayed: the visible area, after any rotation
     size = {"width_pt": round(width, 2), "height_pt": round(height, 2)}
@@ -142,19 +223,31 @@ def _page_candidates(number: int, page) -> PageCandidates:
             notes.append(f"drawn-path scan stopped after reading {PATH_SCAN_LIMIT} objects")
         if max(len(runs), len(rules) + len(boxes), len(glyphs)) > SCAN_LIMIT:
             notes.append(f"scan stopped after {SCAN_LIMIT} shapes of one kind; more exist")
-        found = [("underscore", box) for box in runs[:SCAN_LIMIT]]
-        found += [("rule", box) for box in rules[:SCAN_LIMIT]]
-        found += [("box", box) for box in (boxes[:SCAN_LIMIT] + glyphs[:SCAN_LIMIT])]
+        found = [("underscore", box, False) for box in runs[:SCAN_LIMIT]]
+        found += [("rule", box, False) for box in rules[:SCAN_LIMIT]]
+        found += [("box", box, False) for box in (boxes[:SCAN_LIMIT] + glyphs[:SCAN_LIMIT])]
+        view = (view_left, view_bottom, view_right, view_top)
+        if (
+            not (rules or boxes or glyphs or unread)
+            and _picture_share(page, view) >= IMAGE_COVERAGE
+        ):
+            try:
+                lines, squares, note = _image_shapes(page, view, width, height, runs)
+            except Exception as error:  # the page keeps what its text layer gave
+                lines, squares, note = [], [], f"image scan failed: {type(error).__name__}"
+            found += [("rule", line, True) for line in lines]
+            found += [("box", square, True) for square in squares]
+            notes.append(note)
         visible = []  # only what is visible, clipped to the visible area
-        for kind, (left, bottom, right, top) in found:
+        for kind, (left, bottom, right, top), from_image in found:
             if right > view_left and left < view_right and top > view_bottom and bottom < view_top:
                 clipped = (max(left, view_left), max(bottom, view_bottom))
                 clipped += (min(right, view_right), min(top, view_top))
-                visible.append((kind, clipped))
+                visible.append((kind, clipped, from_image))
         found = visible
         found.sort(key=lambda item: (-item[1][3], item[1][0]))  # reading order: top, then left
         out = []
-        for kind, (left, bottom, right, top) in found[:MAX_PER_PAGE]:
+        for kind, (left, bottom, right, top), from_image in found[:MAX_PER_PAGE]:
             left_text = textpage.get_text_bounded(
                 max(left - CONTEXT_WIDTH, view_left), bottom - 2, left, top + CONTEXT_BAND
             )
@@ -174,6 +267,7 @@ def _page_candidates(number: int, page) -> PageCandidates:
                     left_text=_clean(left_text),
                     right_text=_clean(right_text),
                     below_text=_clean(below_text),
+                    from_image=from_image,
                 )
             )
     finally:
