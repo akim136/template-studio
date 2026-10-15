@@ -101,7 +101,7 @@
 <a class="button primary" href="https://studio.akbuilds.dev/" id="studio-cta" rel="noopener noreferrer" target="_blank">Open Template Studio <svg aria-hidden="true" class="icon"><use href="#i-arrow"></use></svg></a>
 <a class="button" href="https://github.com/akim136/template-studio" rel="noopener noreferrer" target="_blank"><svg aria-hidden="true" class="icon"><use href="#i-code"></use></svg> View repository</a>
 </div>
-<p class="quickline"><a href="#demo">Demo &amp; reviewer access</a> · <span class="subtle">Studio requires Vercel sign-in; repo is private.</span></p>
+<p class="quickline"><a href="#demo">Demo &amp; reviewer access</a> · <span class="subtle">Studio requires Sign in with Vercel; repo is public.</span></p>
 </div>
 <aside aria-label="Template preparation workflow" class="journey">
 <div class="journey-top">ONE TEAM WORKFLOW <span class="pill purple">Human approved</span></div>
@@ -120,7 +120,7 @@
 <div class="benefit"><svg aria-hidden="true" class="icon"><use href="#i-edit"></use></svg><h3>Review on the page</h3><p>Correct field position, signer and requiredness directly on the PDF.</p></div>
 <div class="benefit"><svg aria-hidden="true" class="icon"><use href="#i-save"></use></svg><h3>Controlled from start to finish</h3><p>Immutable revisions, identity-linked approval, and spend guardrails.</p></div></div>
 <div class="cover-close"><h3>Built for Homebase operations.</h3><p>Begin with the internal team. Existing production signing stays separate. Extend to customers only after a supervised pilot and a real provider integration.</p></div>
-<p class="scope"><strong>Assessment scope:</strong> synthetic documents, protected access and simulated signing. No real signing templates are created. Prepared by Alex Kim, Co-Founder &amp; CPO.</p>
+<p class="scope"><strong>Assessment scope:</strong> synthetic documents, signed-in access and simulated signing. No real signing templates are created. Prepared by Alex Kim, Co-Founder &amp; CPO.</p>
 </div><div class="page-foot"><span>HOMEBASE / TEMPLATE STUDIO</span><span>1 / 4</span></div></article>
 <article aria-label="Problem, architecture, and platform choices" class="sheet" id="sheet-2">
 <div class="page-head"><a aria-label="Homebase website" href="https://homebasecre.com"><svg aria-label="Homebase" class="wordmark" role="img" viewbox="0 0 322 34" xmlns="http://www.w3.org/2000/svg">
@@ -167,10 +167,10 @@
 <div class="section-title"><span class="num">03</span><h2 id="choices-title">Three intentional Vercel choices</h2></div>
 <table class="choices-table"><thead><tr><th scope="col">Primitive</th><th scope="col">Why it fits</th><th scope="col">Trade-off</th></tr></thead><tbody>
 <tr><th scope="row">Functions</th><td data-label="Why it fits">Hosts Python 3.13/FastAPI, document parsing and per-page request APIs without a dedicated server.</td><td data-label="Trade-off">Time-bounded work. Browser-driven drafting is resumable while a Studio tab is open, but not a durable server queue.</td></tr>
-<tr><th scope="row">AI Gateway</th><td data-label="Why it fits">Routes Stage A/B calls to OpenAI using Vercel OIDC; the server checks the route and enforces a $10 spend cap.</td><td data-label="Trade-off">Model quality depends on the app's evidence, prompts and visual self-check. The model is fixed in code (gpt-5.4-mini), with no model selector.</td></tr>
-<tr><th scope="row">Preview Deployments</th><td data-label="Why it fits">Branch builds support repeatable UI/code review before merging to production.</td><td data-label="Trade-off">Previews are protected, but share production's R2 bucket and sign-in app. Isolated preview data is still needed.</td></tr>
+<tr><th scope="row">AI Gateway</th><td data-label="Why it fits">Routes Stage A/B calls to OpenAI using Vercel OIDC; the server checks the route and enforces a $20 spend cap.</td><td data-label="Trade-off">Model quality depends on the app's evidence, prompts and visual self-check. The model is fixed in code (gpt-5.4-mini), with no model selector.</td></tr>
+<tr><th scope="row">Preview Deployments</th><td data-label="Why it fits">Branch builds support repeatable UI/code review before merging to production.</td><td data-label="Trade-off">Previews are not behind Vercel Authentication and share production's sign-in app and synthetic-only R2 bucket. Separate preview data is still needed.</td></tr>
 </tbody></table>
-<p class="fineprint"><strong>Access:</strong> Vercel Authentication protects deployments; Sign in with Vercel (OAuth/PKCE) records the operator identity. <strong>Fluid Compute:</strong> enabled, with workload benefit not verified.</p>
+<p class="fineprint"><strong>Access:</strong> Vercel Authentication is off. Sign in with Vercel (OAuth/PKCE) gives identity, the verified email on each review and approval, not authorization: any Vercel account can sign in, so the hosted studio stores synthetic documents only. <strong>Fluid Compute:</strong> enabled, with workload benefit not verified.</p>
 </section>
 </div><div class="page-foot"><span>HOMEBASE / TEMPLATE STUDIO</span><span>2 / 4</span></div></article>
 <article aria-label="Demo, rollout, and success measures" class="sheet" id="sheet-3">
@@ -195,22 +195,22 @@
 <div class="link-grid">
 <div class="link-card"><strong>Application</strong><a href="https://studio.akbuilds.dev/" rel="noopener noreferrer" target="_blank">studio.akbuilds.dev</a></div>
 <div class="link-card"><strong>Solution brief</strong><a href="https://akbuilds.dev/" rel="noopener noreferrer" target="_blank">akbuilds.dev</a></div>
-<div class="link-card"><strong>Repository · Private</strong><a href="https://github.com/akim136/template-studio" rel="noopener noreferrer" target="_blank">github.com/akim136/template-studio</a></div>
+<div class="link-card"><strong>Repository · Public</strong><a href="https://github.com/akim136/template-studio" rel="noopener noreferrer" target="_blank">github.com/akim136/template-studio</a></div>
 </div>
-<p class="fineprint" id="release-note"><strong>Application source:</strong> <a href="https://github.com/akim136/template-studio/commit/d64f620" rel="noopener noreferrer" target="_blank"><code>main d64f620</code></a> with PRs #13–#24 merged. Signed-in production checks covered upload, review and approval; named reviewer invitations are not yet sent.</p>
+<p class="fineprint" id="release-note"><strong>Application source:</strong> <a href="https://github.com/akim136/template-studio/commit/527b3ca" rel="noopener noreferrer" target="_blank"><code>main 527b3ca</code></a> with PRs #13–#29 and #31 merged; app code validated at b4a7dfd. Named reviewer access is not set up.</p>
 <ol class="demo-path">
 <li><span class="stepno">01</span><strong>Set up</strong><p>Enter sponsor/title, choose signers and upload a synthetic PDF.</p></li>
 <li><span class="stepno">02</span><strong>Start drafting</strong><p>Click <em>Start drafting</em>. Watch each page drafted, then checked.</p></li>
 <li><span class="stepno">03</span><strong>Review and save</strong><p>Correct a field, save, and reopen the exact revision.</p></li>
-<li><span class="stepno">04</span><strong>Approve</strong><p>Attest to reviewing that revision. Edit to show approval invalidation.</p></li>
+<li><span class="stepno">04</span><strong>Approve</strong><p>Confirm every page, and each page AI left unchecked. Edits invalidate approval.</p></li>
 <li><span class="stepno">05</span><strong>Simulate &amp; verify</strong><p>Reapprove, create in simulation, and watch the create and verify steps.</p></li>
 </ol>
-<p class="fineprint">Drafting continues while a Studio page remains open; if no tab is driving work, there is no server-side queue. No actual signing-provider template is created.</p>
+<p class="fineprint">Drafting continues while a Studio page remains open; there is no server-side queue, and a deploy that changes the model route or prompts stops a running draft. No signing-provider template is created.</p>
 </section>
 <section aria-labelledby="rollout-title" class="section" id="rollout">
 <div class="section-title"><span class="num">05</span><h2 id="rollout-title">Rollout plan</h2></div>
 <div class="rollout">
-<div class="rollout-row"><strong>Preview</strong><p>Branch deployment with synthetic PDFs, deployment protection and simulated signing.</p></div>
+<div class="rollout-row"><strong>Preview</strong><p>Branch deployment with synthetic PDFs, Sign in with Vercel and simulated signing.</p></div>
 <div class="rollout-row"><strong>Validate</strong><p>Run app, browser and AI checks; compare draft quality, page coverage and review safety against an agreed reference.</p></div>
 <div class="rollout-row"><strong>Canary</strong><p>One Homebase teammate and one supported document family. Measure corrections, time and failures.</p></div>
 <div class="rollout-row"><strong>Cutover</strong><p>Use Studio as default only after supervised acceptance. Build and approve a real signing integration separately.</p></div>
@@ -247,11 +247,11 @@
 <section aria-labelledby="risks-title" class="section" id="risks">
 <div class="section-title"><span class="num">07</span><h2 id="risks-title">Limitations &amp; customer considerations</h2></div>
 <div class="risk-grid">
-<div class="risk"><h3>Supported PDF boundaries</h3><p>25 MiB, 400 pages, 4 million characters and a 3-minute limit. Rotated pages are not sent to the model.</p></div>
+<div class="risk"><h3>Supported PDF boundaries</h3><p>25 MiB, 400 pages, 4 million characters and a 3-minute limit. Rotated pages are not sent to the model and must be confirmed by hand.</p></div>
 <div class="risk"><h3>AI quality remains provisional</h3><p>On the development documents, both trial models still miss required signing fields or signers. Human review stays required.</p></div>
 <div class="risk"><h3>Hosted-only drafting</h3><p>Up to four page requests run concurrently while Studio is open. No local drafting or independent server queue.</p></div>
 <div class="risk"><h3>R2 state and privacy</h3><p>Conditional writes protect revisions; verify conflicts, origin rules, model-provider exposure and access scope for pilot use.</p></div>
-<div class="risk"><h3>Reviewer access</h3><p>Deployment protection and Sign in with Vercel are in place and checked on production. Named reviewer invitations are pending.</p></div>
+<div class="risk"><h3>Reviewer access</h3><p>Sign in with Vercel identifies each reviewer, but any Vercel account can sign in: there is no allowlist. Storage is synthetic-only for that reason.</p></div>
 <div class="risk"><h3>Simulated creation only</h3><p>Each create is recorded, then read back from the studio's storage. No HelloSign/Dropbox Sign API operation occurs.</p></div>
 </div>
 </section>
@@ -262,13 +262,13 @@
 <div class="tool"><strong>Claude Code</strong><p>FastAPI/Jinja implementation, AI integration, debugging and regression tests.</p></div>
 </div>
 <div class="validation-grid">
-<div><h3>Executed automated checks</h3><p>676 pytest tests and Ruff checks pass on main d64f620, and GitHub CI is green on main.</p></div>
+<div><h3>Executed automated checks</h3><p>Local: 698 pytest tests, Ruff and repository checks pass on b4a7dfd (October 15, 2026), and GitHub CI is green.</p></div>
 <div><h3>Browser harness</h3><p>Synthetic PDFs with fake R2 and Gateway: resume and takeover, sign-out cleanup, malformed state and safe create retry.</p></div>
 <div><h3>Two-pass AI evaluation</h3><p>Same analysis service for app and eval: Stage A drafts; Stage B reviews image overlays; human-final corrections remain separate.</p></div>
-<div><h3>Model trials · provisional</h3><p>gpt-4.1 was PARTIAL on two development cases; gpt-5.4-mini drafted both COMPLETE. Against reviewed references, both are still blocked on critical findings.</p></div>
+<div><h3>Model trials · provisional</h3><p>gpt-4.1 was PARTIAL on two development cases; gpt-5.4-mini drafted both COMPLETE. Against UNREVIEWED proposed references (baseline-derived: agreement, not accuracy), both are still blocked on critical findings.</p></div>
 </div>
 <div aria-label="Three evaluation stages" class="stages"><span>Initial page draft</span><span aria-hidden="true" class="arrow">→</span><span>Overlay self-check</span><span aria-hidden="true" class="arrow">→</span><span>Human-approved revision</span></div>
-<div class="status" id="validation-status"><strong>Readiness · implementation snapshot, October 13, 2026</strong><p>Done: PRs #13–#24 merged, tests passing, signed-in production checks of upload, review and approval, and the studio moved to studio.akbuilds.dev. Still to do: a hosted drafting run on production, reviewer invitations and the final submission commit.</p><p>No real signing integration. Model scores stay provisional until geometry tolerances are agreed; hosted drafting was checked on a preview with a synthetic PDF.</p></div>
+<div class="status" id="validation-status"><strong>Readiness · release snapshot, October 15, 2026</strong><p>Done: PRs #13–#29 and #31 merged, 698 tests passing, and signed-in drafting, review, approval and simulated create on synthetic PDFs, checked on a preview and again on production. Still to do: named reviewer access, separate preview data, and agreed geometry tolerances.</p><p>No real signing integration. Model scores stay provisional until geometry tolerances are agreed. A head-to-head with the earlier claude.ai skill workflow on held-out documents is in progress; no result yet.</p></div>
 <p class="refs"><strong>Product references:</strong> <a href="https://vercel.com/docs/functions" rel="noopener noreferrer" target="_blank">Functions</a> · <a href="https://vercel.com/docs/ai-gateway" rel="noopener noreferrer" target="_blank">AI Gateway</a> · <a href="https://vercel.com/docs/deployments/environments" rel="noopener noreferrer" target="_blank">Preview Deployments</a> · <a href="https://vercel.com/docs/sign-in-with-vercel" rel="noopener noreferrer" target="_blank">Sign in with Vercel</a>.</p>
 </section>
 </div><div class="page-foot"><span>HOMEBASE / TEMPLATE STUDIO</span><span>4 / 4</span></div></article></main>
