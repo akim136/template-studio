@@ -1,8 +1,6 @@
 {
   "phase": "P4",
-  "kind": "feature",
-  "features": [
-    "F-P3-solution-brief"
-  ],
-  "summary": "The brief gets the Homebase tab icon, inlined so the page stays self-contained."
+  "kind": "scope_update",
+  "features": [],
+  "summary": "Add F-P4c-scanned-pages (Alex, October 15, 2026): candidates found in the image of a scanned page, and model boxes snapped onto them, built as local stacked branches."
 }
