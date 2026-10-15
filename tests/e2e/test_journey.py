@@ -17,11 +17,18 @@ def pdf(name: str, pages: int) -> dict:
     return {"name": name, "mimeType": "application/pdf", "buffer": make_pdf(texts)}
 
 
+def follow(page: Page, link: str, url: str) -> None:
+    """Clicks a link and waits until the next page has loaded, its scripts included; a click alone
+    returns before they run, and input sent before then is lost."""
+    page.get_by_role("link", name=link).click()
+    page.wait_for_url(url)
+
+
 def create_template(page: Page, pages: int = 3) -> str:
     """Set up a template in the one-signer mode and return its record URL."""
     page.goto("/")
     expect(page.locator(".empty")).to_contain_text("No templates yet")
-    page.get_by_role("link", name="New template").click()
+    follow(page, "New template", "**/new")
     page.select_option("#sponsor-pick", SPONSOR)
     page.set_input_files("[data-file-input]", pdf("synthetic-lp.pdf", pages))
     expect(page.locator("[data-file-state]")).to_have_text("Sealed")
@@ -44,7 +51,7 @@ def test_a_pdf_goes_from_setup_to_a_created_template(page: Page) -> None:
     record = create_template(page)
     expect(page.get_by_text("Field drafting runs on the hosted studio")).to_be_visible()
 
-    page.get_by_role("link", name="Edit fields").click()
+    follow(page, "Edit fields", "**/edit")
     image = page.locator("img[data-sheet-image]").first
     expect(image).to_be_visible()
     loaded = "img => img.complete && img.naturalWidth > 0"
@@ -87,7 +94,7 @@ def test_setup_refuses_a_file_that_is_not_a_pdf(page: Page) -> None:
 
 def test_review_waits_for_unsaved_changes(page: Page) -> None:
     create_template(page, pages=1)
-    page.get_by_role("link", name="Edit fields").click()
+    follow(page, "Edit fields", "**/edit")
     confirm = page.locator("[data-pf-confirm]")
     close = page.locator("dialog[data-preflight] [data-pf-close]").first
 

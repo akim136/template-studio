@@ -10,7 +10,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from tests.e2e.conftest import ROOT
-from tests.e2e.test_journey import create_template
+from tests.e2e.test_journey import create_template, follow
 
 # Runs the server module's entry point with the server replaced by an outbound connection attempt.
 PROBE = """
@@ -35,7 +35,7 @@ def test_the_browser_reaches_only_the_studio(page: Page, errors: list[str]) -> N
 def test_a_page_image_that_fails_to_load_is_reported(page: Page, errors: list[str]) -> None:
     create_template(page, pages=1)
     page.route("**/pages/*.png", lambda route: route.abort("connectionreset"))
-    page.get_by_role("link", name="Edit fields").click()
+    follow(page, "Edit fields", "**/edit")
     expect(page.locator("[data-sheet-note]")).to_contain_text("could not be shown")
     assert [error.split(" ")[0] for error in errors] == ["net::ERR_CONNECTION_RESET"]
     errors.clear()

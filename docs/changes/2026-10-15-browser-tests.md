@@ -30,6 +30,11 @@ cancelled by navigation. Only the studio is reachable:
   cannot answer for it;
 - the suite's own no-network guard is narrowed to the same loopback guard for these tests only.
 
+The test server answers page scripts after 0.25 s, as a slow machine would, so a test that acts
+on a page before its script has run fails locally too. CI's first run caught exactly that: a link
+click returns before the next page's script runs, and the upload was sent to a page that was not
+listening yet. Tests now wait for the next page to load after following a link.
+
 `tests/e2e/test_guards.py` checks each guard. The checks were also confirmed to fail on purpose:
 without the 404 allowance, with a JavaScript error injected into `static/editor.js`, without the
 origin rule, without the failed-request listener, without the server's guard, and with the
