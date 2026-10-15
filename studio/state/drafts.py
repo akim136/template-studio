@@ -303,7 +303,7 @@ class Drafts:
         book = StoreLedger(self.store, self.clock, draft_id)
         total, draft_usd = book.totals()
         counts = {key: sum(1 for p in pages if p["state"] == key) for key in ("done", "lost")}
-        return {
+        view = {
             "id": draft_id,
             "template_id": template_id,
             "base_revision": header["base_revision"],
@@ -325,6 +325,20 @@ class Drafts:
             },
             "applied": applied,
         }
+        if state in (DRAFTED, STOPPED) and not self._recorded(template_id, draft_id, header):
+            view["not_applied"] = UNRECORDED  # apply refuses it, so the page offers a new draft
+        return view
+
+    def _recorded(self, template_id: str, draft_id: str, header: dict) -> bool:
+        """Whether apply may save this draft: it recorded its configuration, or an earlier apply
+        already saved its revision and lost only its record."""
+        if "prompts_sha256" in header:
+            return True
+        head, _ = self.templates.head(template_id)
+        return (
+            head.get("save_id") == f"draft-{draft_id}"
+            and head["revision"] == header["base_revision"] + 1
+        )
 
     # ---- one call ----
 
@@ -477,12 +491,7 @@ class Drafts:
         if current["state"] == RUNNING:
             raise Conflict("the draft is still running", current)
         header = self._header(template_id, draft_id)
-        head, _ = self.templates.head(template_id)
-        landed = (  # an earlier apply saved the revision, then lost its record
-            head.get("save_id") == f"draft-{draft_id}"
-            and head["revision"] == current["base_revision"] + 1
-        )
-        if current["state"] != APPLIED and "prompts_sha256" not in header and not landed:
+        if current["state"] != APPLIED and not self._recorded(template_id, draft_id, header):
             raise Invalid([UNRECORDED])  # its calls may have run on more than one configuration
         outcome = self.result(template_id, draft_id)
         if not outcome["fields"]:
