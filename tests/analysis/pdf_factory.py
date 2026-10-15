@@ -47,17 +47,19 @@ def image_pdf(
     place: tuple[float, float, float, float] | None = None,
     text: bytes = b"",
     in_form: bool = False,
+    form_extra: bytes = b"",
 ) -> bytes:
     """One page per picture, as a scanner writes them: 8-bit grey pixels (rows top to bottom,
     width by height) drawn over ``place`` (left, bottom, width, height in points; default: the
     whole page). ``text`` is added to the page's content, such as an invisible OCR layer, and
-    ``in_form`` draws the picture from inside a form XObject."""
+    ``in_form`` draws the picture from inside a form XObject, which also draws ``form_extra``."""
     objects = {
         1: b"<< /Type /Catalog /Pages 2 0 R >>",
         3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     }
     left, bottom, width, height = place or (0, 0, *size)
     draw = b"q %.2f 0 0 %.2f %.2f %.2f cm /Im1 Do Q" % (width, height, left, bottom)
+    form_stream = draw + b"\n" + form_extra
     kids = []
     step = 4 if in_form else 3  # page, contents, image and, in a form, the form
     for index, (pixels, columns, rows) in enumerate(pictures):
@@ -75,7 +77,7 @@ def image_pdf(
             objects[form] = (
                 b"<< /Type /XObject /Subtype /Form /BBox [0 0 %d %d] /Resources << /XObject "
                 b"<< %s >> >> /Length %d >>\nstream\n%s\nendstream"
-                % (*size, pictures_used, len(draw), draw)
+                % (*size, pictures_used, len(form_stream), form_stream)
             )
             pictures_used, stream = b"/Fm1 %d 0 R" % form, b"/Fm1 Do\n" + text
         else:
