@@ -39,6 +39,7 @@ from studio.state.policy import ROLES
 from studio.state.r2 import R2ObjectStore
 from studio.state.store import StorageError
 from studio.state.templates import TEMPLATE_ID
+from studio.ui.demo_sponsors import DEMO_SPONSORS
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE_SIZE = 10
@@ -242,6 +243,7 @@ def setup(request: Request) -> Response:
         "viewer": viewer,
         "upload": "direct" if isinstance(services.store, R2ObjectStore) else "server",
         "max_bytes": sources.MAX_SOURCE_BYTES,
+        "demo_sponsors": DEMO_SPONSORS,
     }
     return _render(request, services, "setup.html", context)
 
