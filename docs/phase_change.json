@@ -4,5 +4,5 @@
   "features": [
     "F-P4c-scanned-pages"
   ],
-  "summary": "Scanned pages (2): pages that are mostly a picture get rule and box candidates found in the page image (studio/services/candidates.py), with tests on image-only PDFs."
+  "summary": "Scanned pages (3): a field the model placed with its own box is snapped onto the scanned line or square it clearly sits on (studio/services/fields.py), with tests."
 }
