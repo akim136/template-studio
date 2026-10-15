@@ -61,7 +61,10 @@ def boxes(data: bytes) -> list:
 )
 def test_a_symbol_font_box_without_a_unicode_map_is_a_box(font, code):
     [box] = boxes(glyph_page(font, code))
-    assert box.y == pytest.approx(83, abs=1) and 5 <= box.width <= 18
+    # The font is not embedded, so its outline (and the box's exact edges) depends on the font
+    # PDFium substitutes on each system. The box sits in the glyph's 12 pt cell at (100, 700).
+    assert 100 <= box.x + box.width / 2 <= 112
+    assert 792 - 709.6 <= box.y + box.height / 2 <= 792 - 697.6
 
 
 def test_a_symbol_font_box_mapped_to_the_private_use_area_is_a_box():
