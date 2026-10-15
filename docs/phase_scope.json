@@ -1,5 +1,5 @@
 {
-  "active_phase": "P3",
+  "active_phase": "P4",
   "guide": "docs/PROJECT_GUIDE.md",
   "declaration": "docs/phase_change.json",
   "scope_files": [
@@ -80,6 +80,24 @@
         ".gitignore",
         "README.md",
         "tests/test_solution_brief.py"
+      ]
+    },
+    "F-P4a-model-decision": {
+      "summary": "The baseline comparison and model decision (stage 5): a head-to-head of Alex's claude.ai skill and the app's stage B draft on his own holdout documents, under a plan frozen before any trial. The trials, answer key and scores stay outside the repository; the repository records the outcome and the decision. No app change.",
+      "paths": [
+        "docs/model-decision.md"
+      ]
+    },
+    "F-P4b-release-evidence": {
+      "summary": "Release evidence and the fixes from the final validation of main at 3f03aa8 (stage 6): pages the AI never checked carry forward and block approval until each is acknowledged by hand, review confirmation covers every page, a draft stops when its drafting configuration changes, plain save-failure and bad-PDF messages, the editor's page rail at 1024 px, and the hosted ledger's opening balance. Each fix has a test.",
+      "paths": [
+        "studio/",
+        "templates/",
+        "static/",
+        "tests/state/",
+        "tests/ui/",
+        "tests/analysis/",
+        "docs/design-import.md"
       ]
     }
   }
