@@ -414,7 +414,7 @@ class Drafts:
             reason = f"NOT_RUN: stage A has no answer ({evidence.stage_a})"
             skipped = inference.PageEvidence(page=number, stage_b=reason)
             self._finish_b(prefix, number, skipped.stage_b, skipped, None)
-        elif not output.fields and not output.rejected and not prepared.candidates:
+        elif not inference.needs_check(output):
             checked = runner.stage_b(evidence, prepared, output)  # no call: nothing to check
             self._finish_b(prefix, number, evidence.stage_b, evidence, checked)
         return True
