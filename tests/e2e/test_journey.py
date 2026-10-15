@@ -88,9 +88,24 @@ def test_setup_refuses_a_file_that_is_not_a_pdf(page: Page) -> None:
 def test_review_waits_for_unsaved_changes(page: Page) -> None:
     create_template(page, pages=1)
     page.get_by_role("link", name="Edit fields").click()
+    confirm = page.locator("[data-pf-confirm]")
+    close = page.locator("dialog[data-preflight] [data-pf-close]").first
+
     add_signature(page)
-
+    page.click("button[data-save]")
+    expect(page.locator("[data-revision]")).to_have_text("Rev 2")
     page.click("[data-open-preflight]")
+    expect(confirm).to_be_enabled()
+    close.click()
 
-    expect(page.locator("[data-pf-confirm]")).to_be_disabled()
+    add_signature(page, y=400)
+    page.click("[data-open-preflight]")
+    expect(page.locator("[data-pf-unsaved]")).to_be_visible()
+    expect(confirm).to_be_disabled()
     expect(page.locator("[data-approval-label]")).to_have_text("Not reviewed")
+    close.click()
+
+    page.click("button[data-save]")
+    expect(page.locator("[data-revision]")).to_have_text("Rev 3")
+    page.click("[data-open-preflight]")
+    expect(confirm).to_be_enabled()

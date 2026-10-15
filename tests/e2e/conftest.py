@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from tests.e2e.guard import install
+
 ROOT = Path(__file__).resolve().parents[2]
 # Answers the pages expect: the editor reads "no operation yet" from this 404 (static/editor.js).
 EXPECTED = [("GET", re.compile(r"/api/templates/[0-9a-f]{32}/operation"), 404)]
@@ -34,20 +36,7 @@ def pytest_collection_modifyitems(config, items) -> None:
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replaces the suite's guard: these tests reach their own server on loopback, and any other
     address still fails the test."""
-
-    def loopback_only(real, at: int):
-        def guarded(*args: object, **kwargs: object) -> object:
-            target = args[at]
-            host = target[0] if isinstance(target, tuple) else target
-            if host not in ("127.0.0.1", "::1", "localhost"):
-                raise AssertionError("outbound network access attempted during a test")
-            return real(*args, **kwargs)
-
-        return guarded
-
-    monkeypatch.setattr(socket, "create_connection", loopback_only(socket.create_connection, 0))
-    monkeypatch.setattr(socket.socket, "connect", loopback_only(socket.socket.connect, 1))
-    monkeypatch.setattr(socket.socket, "connect_ex", loopback_only(socket.socket.connect_ex, 1))
+    install(monkeypatch.setattr)
 
 
 def _free_port() -> int:
@@ -58,12 +47,12 @@ def _free_port() -> int:
 
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[str]:
-    """The studio in local mode on a loopback port, with no hosted setting in its environment."""
+    """The studio in local mode on a loopback port, with no hosted setting in its environment and
+    the loopback-only guard installed in its process."""
     port = _free_port()
     env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG") if name in os.environ}
     env["STUDIO_STATE_DIR"] = str(tmp_path / "state")
-    command = [sys.executable, "-m", "uvicorn", "app:app", "--host", "127.0.0.1"]
-    command += ["--port", str(port), "--log-level", "warning"]
+    command = [sys.executable, "-m", "tests.e2e.serve", str(port)]
     process = subprocess.Popen(command, cwd=ROOT, env=env)
     base = f"http://127.0.0.1:{port}"
     try:
@@ -94,13 +83,29 @@ def browser():
 
 
 @pytest.fixture
-def page(browser, server: str):
+def errors() -> list[str]:
+    """What went wrong in the page; the page fixture fails the test unless it ends empty."""
+    return []
+
+
+@pytest.fixture
+def page(browser, server: str, errors: list[str]):
     """A fresh browser context on the server. Motion is reduced, so the create dialog skips its
-    pacing delays. A console error, an uncaught exception or an unexpected error answer fails
-    the test; Chrome's own console line for an error answer is left to the answer check."""
+    pacing delays. Requests to any other origin are refused. A console error, an uncaught
+    exception, an unexpected error answer or a failed request fails the test; Chrome's own
+    console line for a failed load is left to the answer and request checks. A request cancelled
+    by navigation (net::ERR_ABORTED) is not a failure."""
     context = browser.new_context(base_url=server, reduced_motion="reduce")
+    origin = urlsplit(server)[:2]
+
+    def only_the_studio(route) -> None:
+        if urlsplit(route.request.url)[:2] == origin:
+            route.continue_()
+        else:
+            route.abort("blockedbyclient")
+
+    context.route("**/*", only_the_studio)
     page = context.new_page()
-    errors: list[str] = []
 
     def console(message) -> None:
         if message.type == "error" and not message.text.startswith("Failed to load resource"):
@@ -115,9 +120,14 @@ def page(browser, server: str):
         if answer.status >= 400 and not expected:
             errors.append(f"{answer.status} {method} {path}")
 
+    def failed(request) -> None:
+        if request.failure != "net::ERR_ABORTED":
+            errors.append(f"{request.failure} {request.method} {request.url}")
+
     page.on("console", console)
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.on("response", response)
+    page.on("requestfailed", failed)
     yield page
     context.close()
     assert errors == []
