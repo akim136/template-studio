@@ -233,6 +233,27 @@ def test_short_runs_of_ink_count_toward_the_limit_too(monkeypatch):
     assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
 
 
+@pytest.mark.parametrize(("runs", "stopped"), [(10, False), (11, True)])
+def test_the_limit_counts_each_long_run_of_ink_once(monkeypatch, runs, stopped):
+    monkeypatch.setattr(raster, "SEGMENT_LIMIT", 10)
+    rows = [b"\xff" * 200] * 30
+    for k in range(runs):  # one long run in every other row, from the row's first pixel
+        rows[2 * k] = b"\x00" * 100 + b"\xff" * 100
+    found = raster.find(rows, 200, 30, 3.0, **LIMITS)
+    assert found.note.startswith("image scan stopped") == stopped
+
+
+@pytest.mark.parametrize(("clusters", "stopped"), [(2, False), (3, True)])
+def test_the_limit_counts_each_run_of_ink_in_a_short_bridged_cluster(
+    monkeypatch, clusters, stopped
+):
+    monkeypatch.setattr(raster, "SEGMENT_LIMIT", 10)
+    cluster = b"\x00\xff\x00\xff\x00\xff\x00" + b"\xff" * 3  # 4 runs bridged into 7 pixels
+    rows = [cluster * clusters + b"\xff" * (40 - 10 * clusters)] + [b"\xff" * 40] * 9
+    found = raster.find(rows, 40, 10, 3.0, **LIMITS)
+    assert found.note.startswith("image scan stopped") == stopped
+
+
 @pytest.mark.parametrize("top", [119, 119.34, 119.67, 120])
 def test_a_faint_rule_is_found_whichever_rows_it_falls_on(top):
     page = Canvas()
@@ -247,12 +268,7 @@ def test_heavy_box_sides_are_not_read_as_runs_at_one_pixel_per_point():
 
 
 WORDS = b"Board Order Dated DOB D.O.B. HOME Hello DD OO BB 88 00 @ & Bob Dad Odd abode bad dog"
-CHECKBOXES = [
-    (72, 600, 9, b""),
-    (150, 600, 9, b"72 600 m"),
-    (228, 600, 12, b""),
-    (320, 597, 6, b""),
-]
+CHECKBOXES = [(72, 600, 9), (150, 600, 9), (228, 600, 12), (320, 597, 6)]
 
 
 def test_words_beside_checkboxes_give_only_the_checkboxes():
@@ -260,7 +276,7 @@ def test_words_beside_checkboxes_give_only_the_checkboxes():
         b"BT /F1 %d Tf 40 %d Td (%s) Tj ET" % (size, 760 - 30 * k, WORDS)
         for k, size in enumerate(range(8, 13))
     ]
-    for left, bottom, size, _ in CHECKBOXES:  # each with its label 3 points to its right
+    for left, bottom, size in CHECKBOXES:  # each with its label 3 points to its right
         content.append(b"0 0 0 RG 0.75 w %d %d %d %d re S" % (left, bottom, size, size))
         content.append(b"BT /F1 9 Tf %d %d Td (Yes) Tj ET" % (left + size + 3, bottom + 1))
     content.append(b"0 0 0 RG 1 w 152 603 m 154 601 l 159 607 l S")  # a tick in the second box
@@ -274,7 +290,7 @@ def test_words_beside_checkboxes_give_only_the_checkboxes():
                 ((left + right) / 2, (top + bottom) / 2) for left, top, right, bottom in found
             )
             expected = sorted(
-                (left + size / 2, 792 - bottom - size / 2) for left, bottom, size, _ in CHECKBOXES
+                (left + size / 2, 792 - bottom - size / 2) for left, bottom, size in CHECKBOXES
             )
             assert centres == [tuple(pytest.approx(v, abs=1) for v in c) for c in expected], dpi
     finally:
