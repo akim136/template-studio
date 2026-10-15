@@ -58,7 +58,7 @@ function row(summary: Summary): Row {
     title: details.title || "Untitled",
     sponsorName: details.sponsor_name ?? "",
     sponsorAccountId: details.sponsor_account_id ?? "",
-    countersigner: summary.countersigner,
+    countersigner: summary.countersigner ?? null, // an unreadable template has none
     status: { label: summary.status, ...(STATUS[summary.status] ?? STATUS.Unreadable) },
     updated: summary.saved_at ?? "",
     attribution,
@@ -75,6 +75,11 @@ function when(stamp: string): string {
 
 function modeLabel(countersigner: boolean): string {
   return MODES[countersigner ? 1 : 0][1];
+}
+
+// Python's casefold, closely enough for this page: upper-casing first turns "ß" into "SS".
+function fold(text: string): string {
+  return text.toUpperCase().toLowerCase();
 }
 
 function one(value: string | string[] | undefined): string {
@@ -111,11 +116,11 @@ export default async function Library({
     );
   }
   const rows = loaded.map(row);
-  const needle = q.toLowerCase();
+  const needle = fold(q);
   const matching = rows.filter((r) => {
     if (mode !== "all" && (r.countersigner === null || r.countersigner !== (mode !== "lp"))) return false;
-    const haystack = [r.title, r.id, r.sponsorName, r.sponsorAccountId].join(" ").toLowerCase();
-    return !needle || haystack.includes(needle);
+    const haystack = [r.title, r.id, r.sponsorName, r.sponsorAccountId].join(" ");
+    return !needle || fold(haystack).includes(needle);
   });
   const counts: Record<string, number> = Object.fromEntries(TABS.map(([key]) => [key, 0]));
   for (const r of matching) {
@@ -123,7 +128,7 @@ export default async function Library({
     counts[r.status.tab] += 1;
   }
   const shown = matching.filter((r) => tab === "all" || r.status.tab === tab);
-  const key = sort === "title" ? (r: Row) => r.title.toLowerCase() : (r: Row) => r.updated;
+  const key = sort === "title" ? (r: Row) => fold(r.title) : (r: Row) => r.updated;
   shown.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (order === "desc" ? -1 : 1));
   const pagesTotal = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
   const page = Math.min(Math.max(Number.parseInt(one(params.page), 10) || 1, 1), pagesTotal);

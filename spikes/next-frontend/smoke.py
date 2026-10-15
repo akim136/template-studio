@@ -5,17 +5,23 @@ Run from the repository root after `npm ci` in this directory:
 
     uv run --locked python spikes/next-frontend/smoke.py
 
-It starts the studio in local mode (tests/e2e/serve.py, with its loopback-only guard), creates two
-templates through the JSON API, builds the Next app against it (rewrite destinations are fixed
-at build time), starts `next start`, and loads the library from each in
-Chromium. Next runs twice: with a per-request nonce (proxy.ts) and with today's policy unchanged
-(SPIKE_CSP=classic). It prints what each page rendered, its console errors, and the script bytes
-the browser ran.
+It starts the studio in local mode (tests/e2e/serve.py, with its loopback-only guard), creates
+three templates through the JSON API and one unreadable one, builds the Next app against it
+(rewrite destinations are fixed at build time), starts `next start`, and loads the library from
+each in Chromium. Next runs twice: with a per-request nonce (proxy.ts) and with today's policy
+unchanged (SPIKE_CSP=classic). It prints what each page rendered, its console errors, and the
+script bytes the browser ran.
+
+It exits non-zero if the Next server answers a request naming another host, if the two pages show
+different rows (all templates, a search that needs casefolding, a signature-mode filter), or if the
+Next page fails instead of saying so when FastAPI is down.
 """
 
 import gzip
+import http.client
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -60,14 +66,30 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def next_server(api: str, csp: str) -> tuple[subprocess.Popen, str]:
+def start(command: list[str], servers: list, **options) -> subprocess.Popen:
+    """A server in its own process group, recorded before it is waited on, so it always stops."""
+    process = subprocess.Popen(command, start_new_session=True, **options)
+    servers.append(process)
+    return process
+
+
+def stop(process: subprocess.Popen) -> None:
+    """Stops the whole group: npx runs  as a child process."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    process.wait(10)
+
+
+def next_server(api: str, csp: str, servers: list) -> str:
     port = free_port()
     env = {**os.environ, "STUDIO_API": api, "SPIKE_CSP": csp, "NODE_ENV": "production"}
     command = ["npx", "next", "start", "--port", str(port), "--hostname", "127.0.0.1"]
-    process = subprocess.Popen(command, cwd=HERE, env=env, stdout=subprocess.DEVNULL)
+    process = start(command, servers, cwd=HERE, env=env, stdout=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{port}"
     wait(f"{base}/", process)
-    return process, base
+    return base
 
 
 def measure(browser, url: str, name: str) -> dict:
@@ -107,6 +129,30 @@ def measure(browser, url: str, name: str) -> dict:
     }
 
 
+def foreign(base: str) -> dict:
+    """What the Next server answers a page and an API request that name another host, as a
+    request from another machine would; local mode must refuse both, as FastAPI does."""
+    port = int(base.rsplit(":", 1)[1])
+    answers = {}
+    for path in ("/", "/api/templates"):
+        for header, value in (("Host", "192.0.2.10:3000"), ("Origin", "http://192.0.2.10")):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            headers = {"Host": f"127.0.0.1:{port}", header: value}
+            connection.request("GET", path, headers=headers)
+            answers[f"{path} {header}"] = connection.getresponse().status
+            connection.close()
+    return answers
+
+
+def table(browser, url: str) -> list[str]:
+    """The library rows a page shows, as text."""
+    page = browser.new_page()
+    page.goto(url, wait_until="networkidle")
+    rows = [" ".join(t.split()) for t in page.locator("table.templates tbody tr").all_inner_texts()]
+    page.close()
+    return rows
+
+
 def timing(url: str, n: int = 30) -> float:
     took = []
     for _ in range(n):
@@ -122,16 +168,21 @@ def main() -> None:
     env = {name: os.environ[name] for name in ("PATH", "HOME", "LANG") if name in os.environ}
     env["STUDIO_STATE_DIR"] = state
     command = [sys.executable, "-m", "tests.e2e.serve"]
-    api_process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
-    servers = [api_process]
+    servers: list[subprocess.Popen] = []
     try:
+        api_process = start(command, servers, cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
         api = f"http://127.0.0.1:{api_process.stdout.readline().strip()}"
         wait(f"{api}/healthz", api_process)
         source = post(api, "/api/sources", make_pdf(["Subscription agreement"]), "application/pdf")
-        for title, account in (("Fund I subscription", "acct-1"), ("Fund II side letter", "")):
+        titles = [("Fund I subscription", "acct-1"), ("Fund II side letter", "")]
+        titles.append(("Straße lease", ""))  # Python casefolds "ß" to "ss"
+        for title, account in titles:
             details = {"title": title, "sponsor_name": "Demo", "sponsor_account_id": account}
             body = {"source_sha256": source["sha256"], "policy": POLICY, "details": details}
             post(api, "/api/templates", json.dumps(body).encode(), "application/json")
+        unreadable = Path(state) / "templates" / ("f" * 32) / "head.json"
+        unreadable.parent.mkdir(parents=True)
+        unreadable.write_text("not json")  # listed as Unreadable, with no signature mode
         started = time.perf_counter()
         build_env = {**os.environ, "STUDIO_API": api}
         build = ["npx", "next", "build"]
@@ -141,17 +192,37 @@ def main() -> None:
             browser = playwright.chromium.launch()
             results["fastapi"] = measure(browser, f"{api}/", "fastapi")
             results["fastapi"]["median_ms"] = timing(f"{api}/")
+            bases = {}
             for csp in ("nonce", "classic"):
-                process, base = next_server(api, csp)
-                servers.append(process)
+                base = bases[csp] = next_server(api, csp, servers)
                 results[f"next_{csp}"] = measure(browser, f"{base}/", f"next_{csp}")
                 results[f"next_{csp}"]["median_ms"] = timing(f"{base}/")
+                results[f"next_{csp}"]["foreign_host"] = foreign(base)
+            parity = {}
+            for query in ("/", "/?q=STRASSE", "/?mode=lp"):
+                ours = table(browser, f"{api}{query}")
+                theirs = table(browser, f"{bases['nonce']}{query}")
+                parity[query] = {"same": ours == theirs, "fastapi": len(ours), "next": len(theirs)}
+            results["parity"] = parity
+            stop(api_process)
+            page = browser.new_page()
+            answer = page.goto(f"{bases['nonce']}/")
+            results["api_down"] = {
+                "status": answer.status,
+                "alert": page.get_by_text("Templates could not be loaded").count() == 1,
+            }
+            page.close()
             browser.close()
         print(json.dumps(results, indent=2))
+        failures = [query for query, check in results["parity"].items() if not check["same"]]
+        if failures or not results["api_down"]["alert"]:
+            raise SystemExit(f"the pages differ: {failures}, API down: {results['api_down']}")
+        refused = [results[f"next_{csp}"]["foreign_host"] for csp in ("nonce", "classic")]
+        if any(status != 403 for answers in refused for status in answers.values()):
+            raise SystemExit("the Next server answered a request naming another host")
     finally:
         for process in servers:
-            process.terminate()
-            process.wait(10)
+            stop(process)
 
 
 if __name__ == "__main__":
