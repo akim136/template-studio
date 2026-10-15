@@ -1,10 +1,43 @@
 // Shared page behaviour: the account menu, signing out, the library's filters, the toast, and
-// drafting that goes on in the background.
+// drafting that goes on in the background. It loads before every page script, which takes its
+// small helpers from here (`el`, `fact`, `plural`, `sleep`, `warnBeforeLeaving`).
 "use strict";
 
 window.studio = (() => {
   let toastTimer = null;
   let refreshLibrary = null; // set on the library: shows the current view again in place
+
+  // ---- helpers the page scripts share ----
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  // An element: `class` and `text` set those properties, `on…` adds a listener, true sets an
+  // empty attribute, and false, null or undefined leave the attribute out.
+  function el(tagName, attributes = {}, ...children) {
+    const node = document.createElement(tagName);
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value === false || value === null || value === undefined) continue;
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value === true ? "" : value);
+    }
+    node.append(...children);
+    return node;
+  }
+
+  // A term and its value in a description list; `className`, if any, goes on the value.
+  function fact(list, term, value, className) {
+    list.append(el("dt", { text: term }), el("dd", { class: className, text: value }));
+  }
+
+  // Asks before the page is left while `busy()` holds.
+  function warnBeforeLeaving(busy) {
+    window.addEventListener("beforeunload", (event) => {
+      if (busy()) event.preventDefault();
+    });
+  }
 
   function toast(message) {
     const box = document.querySelector("[data-toast]");
@@ -65,10 +98,8 @@ window.studio = (() => {
       if (answer.ok) {
         drafting.forget(); // nobody signed in carries these drafts on now
         document.body.replaceChildren();
-        const note = document.createElement("p");
-        note.className = "page";
-        note.textContent = "Signed out of the studio. You are still signed in to Vercel.";
-        document.body.append(note);
+        const note = "Signed out of the studio. You are still signed in to Vercel.";
+        document.body.append(el("p", { class: "page", text: note }));
       } else {
         toast(answer.reason);
       }
@@ -162,8 +193,6 @@ window.studio = (() => {
 
   const DRAFTING_PREFIX = "studio.drafting.";
   const IDLE_MS = 3000;
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const viewer = () => document.body.dataset.viewer; // undefined on a page with nobody to name
   // The server's ID formats (studio/state/templates.py, drafts.py): a kept entry builds request paths.
   const TEMPLATE_ID = /^[0-9a-f]{32}$/;
@@ -297,5 +326,5 @@ window.studio = (() => {
     setUpDrafting();
   });
 
-  return { api, reason, toast, drafting };
+  return { api, reason, toast, drafting, el, fact, plural, sleep, warnBeforeLeaving };
 })();

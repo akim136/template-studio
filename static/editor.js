@@ -13,7 +13,8 @@
   const id = data.template.id;
   const pages = data.pages;
   const byPage = new Map(pages.map((p) => [p.page, p]));
-  const api = (method, path, body) => window.studio.api(method, `/api/templates/${id}${path}`, body);
+  const api = (method, path, body) => studio.api(method, `/api/templates/${id}${path}`, body);
+  const { el, fact, plural } = studio;
 
   const TYPES = {
     signature: "Signature", initials: "Initials", date_signed: "Date signed", text: "Text",
@@ -60,7 +61,6 @@
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   const round = (value) => Math.round(value * 100) / 100;
   const clamp = (value, low, high) => Math.max(low, Math.min(value, high));
-  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const roles = () => data.roles.slice(0, saved.policy.countersigner ? 2 : 1);
   const role = (signer) => (signer === "sender" ? "Homebase prefill" : data.roles[signer] || `signer ${signer}`);
   const tag = (signer) => (signer === "sender" ? "M" : signer === 1 ? "S" : "C");
@@ -182,7 +182,7 @@
   function addAt(x, y) {
     const p = current();
     if (!placeable(p)) {
-      window.studio.toast("Fields cannot be placed on this page.");
+      studio.toast("Fields cannot be placed on this page.");
       return;
     }
     const [width, height] = SIZES[placing.type];
@@ -213,7 +213,7 @@
     if (answer.ok) {
       saved = answer.data.template;
       pending = null;
-      window.studio.toast(answer.data.new_revision ? `Saved as revision ${saved.revision}.` : `Revision ${saved.revision} was already saved.`);
+      studio.toast(answer.data.new_revision ? `Saved as revision ${saved.revision}.` : `Revision ${saved.revision} was already saved.`);
     } else if (answer.status === 409 && answer.data && answer.data.detail && answer.data.detail.current) {
       conflict = answer.data.detail.current;
       pending = null;
@@ -333,18 +333,6 @@
   }
 
   // ---- drawing ----
-
-  function el(tagName, attributes = {}, ...children) {
-    const node = document.createElement(tagName);
-    for (const [key, value] of Object.entries(attributes)) {
-      if (key === "class") node.className = value;
-      else if (key === "text") node.textContent = value;
-      else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-      else if (value !== false && value !== null && value !== undefined) node.setAttribute(key, value === true ? "" : value);
-    }
-    node.append(...children);
-    return node;
-  }
 
   function scale() {
     const p = current();
@@ -596,20 +584,16 @@
       : [el("li", { class: "help", text: "No blocking issues in this revision." })]));
   }
 
-  function fact(list, key, value, mono = false) {
-    list.append(el("dt", { text: key }), el("dd", { class: mono ? "mono" : "", text: value }));
-  }
-
   function renderPreflight() {
     const unsaved = dirty() || saving;
     $("[data-pf-subtitle]").textContent = `Revision ${saved.revision} · saved ${saved.saved_at.slice(0, 16).replace("T", " ")} UTC`;
     $("[data-pf-unsaved]").hidden = !unsaved;
     const identity = $("[data-pf-identity]");
     identity.replaceChildren();
-    fact(identity, "Template", saved.id, true);
+    fact(identity, "Template", saved.id, "mono");
     fact(identity, "Revision", String(saved.revision));
-    fact(identity, "Binding", `${saved.binding.slice(0, 16)}…`, true);
-    fact(identity, "Source SHA-256", `${saved.source_sha256.slice(0, 16)}…`, true);
+    fact(identity, "Binding", `${saved.binding.slice(0, 16)}…`, "mono");
+    fact(identity, "Source SHA-256", `${saved.source_sha256.slice(0, 16)}…`, "mono");
     fact(identity, "Signature mode", data.modes[saved.policy.countersigner ? "countersign" : "lp"]);
     fact(identity, "Sponsor", saved.details.sponsor_name || "Unassigned");
     fact(identity, "Title", saved.details.title || "Untitled");
@@ -628,7 +612,7 @@
     const mergeList = $("[data-pf-merges]");
     mergeList.replaceChildren();
     if (!merges.size) fact(mergeList, "Merges", "None");
-    for (const [name, n] of merges) fact(mergeList, `${LABELS[name] || name}`, `${name} × ${n}`, true);
+    for (const [name, n] of merges) fact(mergeList, `${LABELS[name] || name}`, `${name} × ${n}`, "mono");
     $("[data-pf-pages-title]").textContent = `Pages with fields · ${withFields.size} of ${pages.length}`;
     $("[data-pf-pages]").replaceChildren(...[...withFields].sort((a, b) => a[0] - b[0]).map(([n, count]) => el("li", {},
       el("button", { type: "button", class: "list-button", onclick: () => { page = n; selected = null; $("[data-preflight]").close(); render(); } },
@@ -1045,11 +1029,9 @@
   window.addEventListener("resize", () => { if (zoom === "fit") renderCanvas(); });
   if (new URLSearchParams(window.location.search).has("drafted")) { // arrived from drafting
     window.history.replaceState(null, "", window.location.pathname);
-    if (drafted && drafted.fields) window.studio.toast(`Drafted ${plural(drafted.fields, "field")} as revision ${drafted.revision}. Correct and review ${drafted.fields === 1 ? "it" : "them"} here.`);
+    if (drafted && drafted.fields) studio.toast(`Drafted ${plural(drafted.fields, "field")} as revision ${drafted.revision}. Correct and review ${drafted.fields === 1 ? "it" : "them"} here.`);
   }
-  window.addEventListener("beforeunload", (event) => {
-    if (dirty() || saving || working) event.preventDefault();
-  });
+  studio.warnBeforeLeaving(() => dirty() || saving || working);
 
   render();
 })();
