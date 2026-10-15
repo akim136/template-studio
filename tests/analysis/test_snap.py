@@ -100,3 +100,20 @@ def test_a_field_drawn_on_a_scanned_page_snaps_to_what_its_image_shows():
     )
     box = placed(drawn(301, 181, 9, 9, type="checkbox"), found)
     assert box[:4] == (square.x, square.y, square.width, square.height)
+
+
+def test_a_snap_that_would_leave_the_page_keeps_the_model_box():
+    near_top = dataclasses.replace(LINE, y=9.0)  # no room above it for a 14-point field
+    assert placed(drawn(72, 0, 150, 10), [near_top]) == (72.0, 0.0, 150.0, 10.0, "model_box", None)
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        {"left": 1223.998, "top": 360.0, "width": 20.0, "height": 20.0},  # 0.001 points wide
+        {"left": 600.0, "top": 1583.998, "width": 20.0, "height": 20.0},  # 0.001 points tall
+    ],
+)
+def test_a_sliver_at_the_page_edge_is_not_snapped(box):
+    edge = [dataclasses.replace(SQUARE, x=600.0, y=180.0), dataclasses.replace(SQUARE, y=781.0)]
+    assert placed(raw(box=box, type="checkbox"), edge)[4] == "model_box"

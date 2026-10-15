@@ -133,9 +133,11 @@ def _geometry(raw, kind, candidate, scale, page_size):
     return round(x, 2), round(y, 2), round(width, 2), round(height, 2), "model_box"
 
 
-def _snapped(kind, x, y, width, height, scanned: list[Candidate]):
+def _snapped(kind, x, y, width, height, scanned: list[Candidate], page_size):
     """(x, y, width, height, "snapped") on the scanned line or square the box clearly sits on,
-    or None when there is none, or two are about as near."""
+    or None when there is none, two are about as near, or the result would leave the page."""
+    if width <= 0 or height <= 0:  # positive before rounding, so a sliver can be zero here
+        return None
     near = []  # (distance, candidate)
     if kind in CHECKBOX_TYPES:
         for c in scanned:
@@ -160,10 +162,15 @@ def _snapped(kind, x, y, width, height, scanned: list[Candidate]):
         return None
     c = near[0][1]
     if kind in CHECKBOX_TYPES:
-        return c.x, c.y, c.width, c.height, "snapped"
-    left, right = max(x, c.x), min(x + width, c.x + c.width)
-    tall = LINE_FIELD_HEIGHT.get(kind, DEFAULT_LINE_FIELD_HEIGHT)
-    return left, round(c.y + c.height - tall, 2), round(right - left, 2), tall, "snapped"
+        out = c.x, c.y, c.width, c.height
+    else:
+        left, right = max(x, c.x), min(x + width, c.x + c.width)
+        tall = LINE_FIELD_HEIGHT.get(kind, DEFAULT_LINE_FIELD_HEIGHT)
+        out = left, round(c.y + c.height - tall, 2), round(right - left, 2), tall
+    page_width, page_height = page_size
+    if out[0] < 0 or out[1] < 0 or out[0] + out[2] > page_width or out[1] + out[3] > page_height:
+        return None  # e.g. a line near the top leaves no room for the field's height above it
+    return (*out, "snapped")
 
 
 def _number(value) -> bool:
@@ -229,7 +236,7 @@ def resolve(
             rejected.append(Rejected(page, raw, geometry))
             continue
         if geometry[4] == "model_box" and scanned:
-            geometry = _snapped(kind, *geometry[:4], scanned) or geometry
+            geometry = _snapped(kind, *geometry[:4], scanned, page_size) or geometry
         x, y, width, height, source = geometry
         fields.append(
             Field(
