@@ -1,8 +1,10 @@
 """Field-position candidates with exact geometry, read from the PDF itself.
 
 Three mechanical sources: underscore runs in the text layer, drawn horizontal rules, and small
-drawn or glyph squares (checkbox shapes). A candidate is a place a field might go, not a field:
-the model decides which candidates are fields and may propose fields that have no candidate.
+drawn or glyph squares (checkbox shapes). A box glyph in a symbol font is recognized by its font
+and character code, since such fonts often carry no Unicode mapping. A candidate is a place a field
+might go, not a field: the model decides which candidates are fields and may propose fields that
+have no candidate.
 
 Coordinates are source points with a top-left origin, measured from the page's visible area (the
 crop box within the media box), which is the area PDFium renders. Rotated pages are not read.
@@ -13,6 +15,8 @@ drawn-path scan stops after reading PATH_SCAN_LIMIT objects; the page says so in
 
 from __future__ import annotations
 
+import ctypes
+import re
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
@@ -25,6 +29,14 @@ SCAN_LIMIT = 2000  # shapes of one kind read per page at most
 CHAR_SCAN_LIMIT = 100_000  # characters per page the underscore and glyph scans read at most
 PATH_SCAN_LIMIT = 50_000  # drawn-path objects per page read at most
 BOX_GLYPHS = frozenset("\u2610\u25a1\u25a2\u2751\u2752\uf06f\uf0a8\uf071")  # last 3: Wingdings
+# Box codes in symbol fonts, by font family. PDFium reads such a code c as the character c when the
+# font has no Unicode map (Wingdings 2's empty box as "£"), or as U+F000 + c when it maps to the
+# private use area, as Word does.
+SYMBOL_BOXES = {"wingdings": frozenset({0x6F, 0x71, 0xA8}), "wingdings2": frozenset({0xA3})}
+SYMBOL_CODES = frozenset().union(*SYMBOL_BOXES.values())
+# Names what this module finds; the drafts' frozen hash includes it. Change it whenever what is
+# found changes, so a draft started before stops instead of mixing two kinds of candidates.
+FINDS = "underscore runs; drawn rules; drawn squares; box glyphs, and symbol-font boxes by font"
 RULE_MIN_WIDTH, RULE_MAX_HEIGHT = 36.0, 2.0
 BOX_MIN, BOX_MAX, BOX_SKEW = 5.0, 18.0, 3.0
 CONTEXT_WIDTH, CONTEXT_BAND = 220.0, 12.0
@@ -84,12 +96,34 @@ def _underscore_runs(textpage, limit: int) -> list[tuple[float, float, float, fl
     return runs
 
 
+def _font_family(textpage, index: int, name) -> str:
+    """The character's font name without a subset prefix or style, in lower case and without
+    spaces: "ABCDEF+Wingdings2", "Wingdings 2" and "Wingdings2-Regular" all give "wingdings2"."""
+    length = pdfium_raw.FPDFText_GetFontInfo(textpage.raw, index, name, len(name), None)
+    if not 0 < length <= len(name):  # PDFium writes nothing when the name does not fit
+        return ""
+    text = name.raw[: length - 1].decode("latin-1").rsplit("+", 1)[-1]
+    return re.sub(r"[-,].*", "", text).replace(" ", "").lower()
+
+
+def _is_box_glyph(textpage, index: int, char: str, name) -> bool:
+    if char in BOX_GLYPHS:
+        return True
+    if len(char) != 1:
+        return False
+    code = ord(char) - 0xF000 if 0xF000 <= ord(char) <= 0xF0FF else ord(char)
+    if code not in SYMBOL_CODES:  # most characters stop here, before the font is read
+        return False
+    return code in SYMBOL_BOXES.get(_font_family(textpage, index, name), ())
+
+
 def _glyph_boxes(textpage, limit: int) -> list[tuple[float, float, float, float]]:
     boxes = []
+    name = ctypes.create_string_buffer(256)
     for index in range(textpage.count_chars()):
         if len(boxes) > limit:
             break
-        if textpage.get_text_range(index, 1) in BOX_GLYPHS:
+        if _is_box_glyph(textpage, index, textpage.get_text_range(index, 1), name):
             boxes.append(textpage.get_charbox(index))
     return boxes
 

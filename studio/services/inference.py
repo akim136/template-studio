@@ -33,6 +33,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from studio.services import candidates as candidate_finder
 from studio.services import gateway
 from studio.services.analysis import AnalysisResult
 from studio.services.candidates import PageCandidates, extract_candidates
@@ -103,10 +104,12 @@ class RunConfig:
 
     def prompts_sha256(self) -> str:
         """A hash of what the model is told (the preflight, and both stage prompts with their
-        business rules, as the runner builds them) and of which pages stage B checks."""
+        business rules, as the runner builds them), of what the candidate finder looks for, and
+        of which pages stage B checks."""
         rules = self.rules()
         told = [PREFLIGHT_TEXT, STAGE_A.format(rules=rules), STAGE_B.format(rules=rules)]
-        return hashlib.sha256(json.dumps([*told, CHECK_RULE]).encode()).hexdigest()
+        rules_in_code = [candidate_finder.FINDS, CHECK_RULE]
+        return hashlib.sha256(json.dumps([*told, *rules_in_code]).encode()).hexdigest()
 
 
 @dataclass

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from studio.services import gateway, inference
+from studio.services import candidates, gateway, inference
 from studio.services.analysis import analyze
 from studio.state import drafts, lifecycle, sources
 from studio.state.drafts import Drafts, Unavailable
@@ -385,6 +385,7 @@ CHANGES = {
     "rules": (inference, "RULES", inference.RULES + "\n- New."),
     "prompt": (inference, "STAGE_B", inference.STAGE_B + " Now."),
     "check rule": (inference, "CHECK_RULE", inference.CHECK_RULE + " Now."),
+    "candidates": (candidates, "FINDS", candidates.FINDS + " Now."),
 }
 
 
