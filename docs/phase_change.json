@@ -4,5 +4,5 @@
   "features": [
     "F-P4c-scanned-pages"
   ],
-  "summary": "Scanned pages (1): a plain-Python detector of lines and checkbox squares in a page's grey pixels (studio/services/raster.py), with its tests. Not wired in yet."
+  "summary": "Scanned pages (2): pages that are mostly a picture get rule and box candidates found in the page image (studio/services/candidates.py), with tests on image-only PDFs."
 }
