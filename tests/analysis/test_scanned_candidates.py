@@ -115,11 +115,13 @@ def test_a_large_page_is_scanned_at_a_lower_scale_or_not_at_all(monkeypatch):
     assert len(scales) == 1
 
 
-def test_a_failed_image_scan_keeps_what_the_text_layer_gave(monkeypatch):
+@pytest.mark.parametrize("failing", ["find", "_picture_share"])
+def test_a_failed_image_scan_keeps_what_the_text_layer_gave(monkeypatch, failing):
     def broken(*args, **kwargs):
         raise RuntimeError("synthetic")
 
-    monkeypatch.setattr(candidates_module.raster, "find", broken)
+    owner = candidates_module.raster if failing == "find" else candidates_module
+    monkeypatch.setattr(owner, failing, broken)
     found = extract_candidates(scanned(form, text=NAME_LINE.replace(b"Tf ", b"Tf 3 Tr ")))[0]
     assert [c.kind for c in found.candidates] == ["underscore"]
     assert found.reason == "image scan failed: RuntimeError"
@@ -177,3 +179,11 @@ def test_each_picture_is_a_page_of_its_own(in_form):
     blank = (b"\xff" * 4, 2, 2)
     pages = extract_candidates(image_pdf([blank, blank, blank], in_form=in_form))
     assert [page.page for page in pages] == [1, 2, 3]
+
+
+def test_a_picture_check_cut_short_says_so(monkeypatch):
+    monkeypatch.setattr(candidates_module, "PATH_SCAN_LIMIT", 1)  # the form, not the picture in it
+    found = extract_candidates(scanned(form, in_form=True))[0]
+    assert (found.candidates, found.reason) == ([], "picture check stopped after reading 1 objects")
+    monkeypatch.setattr(candidates_module, "PATH_SCAN_LIMIT", 2)
+    assert len(extract_candidates(scanned(form, in_form=True))[0].candidates) == 2

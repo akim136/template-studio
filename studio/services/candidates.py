@@ -142,15 +142,16 @@ def _area_within(obj, view: tuple[float, float, float, float]) -> float:
     return max(wide, 0.0) * max(tall, 0.0)
 
 
-def _picture_share(page, view: tuple[float, float, float, float]) -> float:
+def _picture_share(page, view: tuple[float, float, float, float]) -> tuple[float, bool]:
     """Share of the visible area under pictures: each top-level image, and each top-level form
     that draws one, by its bounds on the page (overlaps are not removed; at most 1). Reads at most
-    PATH_SCAN_LIMIT objects."""
+    PATH_SCAN_LIMIT objects; the flag is set if more remain unread."""
     view_left, view_bottom, view_right, view_top = view
     area = (view_right - view_left) * (view_top - view_bottom)
-    covered, current, pictured = 0.0, None, False
+    covered, current, pictured, stopped = 0.0, None, False, False
     for read, obj in enumerate(page.get_objects(max_depth=2)):
         if read == PATH_SCAN_LIMIT:
+            stopped = True
             break
         if obj.level == 0:  # a new top-level object: count the one before if it was a picture
             covered += _area_within(current, view) if pictured else 0.0
@@ -158,7 +159,7 @@ def _picture_share(page, view: tuple[float, float, float, float]) -> float:
         elif obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
             pictured = True  # a form that draws a picture counts by its own bounds
     covered += _area_within(current, view) if pictured else 0.0
-    return min(covered / area, 1.0) if area > 0 else 0.0
+    return (min(covered / area, 1.0) if area > 0 else 0.0), stopped
 
 
 def _image_scale(width: float, height: float) -> float | None:
@@ -250,17 +251,21 @@ def _page_candidates(number: int, page) -> PageCandidates:
         found += [("rule", box, False) for box in rules[:SCAN_LIMIT]]
         found += [("box", box, False) for box in (boxes[:SCAN_LIMIT] + glyphs[:SCAN_LIMIT])]
         view = (view_left, view_bottom, view_right, view_top)
-        if (
-            not (rules or boxes or glyphs or unread)
-            and _picture_share(page, view) >= IMAGE_COVERAGE
-        ):
-            try:
-                lines, squares, note = _image_shapes(page, view, width, height, runs)
-            except Exception as error:  # the page keeps what its text layer gave
+        if not (rules or boxes or glyphs or unread):
+            try:  # the picture check and the scan: the page keeps what its text layer gave
+                share, stopped = _picture_share(page, view)
+                if share >= IMAGE_COVERAGE:
+                    lines, squares, note = _image_shapes(page, view, width, height, runs)
+                else:
+                    lines, squares, note = [], [], ""
+                    if stopped:
+                        note = f"picture check stopped after reading {PATH_SCAN_LIMIT} objects"
+            except Exception as error:
                 lines, squares, note = [], [], f"image scan failed: {type(error).__name__}"
             found += [("rule", line, True) for line in lines]
             found += [("box", square, True) for square in squares]
-            notes.append(note)
+            if note:
+                notes.append(note)
         visible = []  # only what is visible, clipped to the visible area
         for kind, (left, bottom, right, top), from_image in found:
             if right > view_left and left < view_right and top > view_bottom and bottom < view_top:
