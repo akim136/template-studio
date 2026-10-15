@@ -24,6 +24,7 @@ def test_page_is_self_contained():
     assert not re.search(r"<link[^>]*rel=\"?(stylesheet|preload)", html)
     assert not re.search(r"href=\"[^\"]*\.pdf\"", html)
     assert "vercel.app" not in html
+    assert re.search(r'<link href="data:image/png;base64,[^"]+" rel="icon"', html)
 
 
 def test_only_the_page_is_published():
