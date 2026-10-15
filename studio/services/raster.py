@@ -315,7 +315,11 @@ def find(
 
     match, side = EDGE_MATCH * scale, max(2, round(EDGE_MAX_THICKNESS * scale))
     sizes = (side, *(max(2, round(points * scale)) for points in (SIDE_WINDOW, RING, CORNER)))
-    least, most = box_min * scale, box_max * scale  # a box's outer size, as a drawn box's bounds
+    # A box's outer size, as a drawn box's bounds. At a fractional scale a box renders its size
+    # rounded up or down, depending on where its edges fall on the pixel grid: the largest box is
+    # still read when rounded up, but the smallest is not when rounded down, since letters of
+    # about that size would then be read as boxes too
+    least, most = box_min * scale, math.ceil(box_max * scale)
     edges = [
         band
         for band in bands
