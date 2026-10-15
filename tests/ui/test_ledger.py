@@ -15,7 +15,7 @@ def rows(store):
 def test_a_new_ledger_opens_with_the_spend_before_it(services, clock):
     book = StoreLedger(services.store, clock, "draft-1")
     assert book.totals() == (float(OPENING_USD), 0.0)
-    assert book.remaining() == Decimal(10) - OPENING_USD
+    assert book.remaining() == Decimal(20) - OPENING_USD  # Alex's $20 cap, October 15, 2026
 
 
 def test_a_reservation_counts_at_its_worst_case_until_settled(services, clock):

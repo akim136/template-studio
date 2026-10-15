@@ -16,7 +16,7 @@
     {% if viewer.local %}
       <div class="alert alert-blue" role="status">
         <strong>Field drafting runs on the hosted studio.</strong>
-        Local state has no model credential, and the $10.00 spend cap is held in one ledger on the hosted studio, so drafting here could count spend twice. Open this template on the hosted studio to draft its fields.
+        Local state has no model credential, and the ${{ cap }} spend cap is held in one ledger on the hosted studio, so drafting here could count spend twice. Open this template on the hosted studio to draft its fields.
       </div>
       <div class="actions"><a class="button" href="/templates/{{ template.id }}">Back to the record</a></div>
     {% else %}
