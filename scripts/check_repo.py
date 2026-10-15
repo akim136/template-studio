@@ -2,7 +2,9 @@
 """Focused repository checks for Homebase Template Studio. Standard library only.
 
   private  Block private inputs and answer-bearing artifacts from the index or history.
-  phase    Check this change against the phase policy read from the base revision.
+  phase    Check this change against the phase policy read from the base revision. When
+           the base policy names a `changes` directory, the change declares itself in the
+           one note it adds there instead of amending the guide and the declaration file.
 
 Exit codes: 0 pass, 1 findings, 2 usage or git error, 3 bootstrap required (the
 base has no phase policy, so Alex's manual review is the gate).
@@ -50,6 +52,8 @@ PDF_HEADER = re.compile(rb"(?:^|[\r\n\0])%PDF-\d")
 ZIP_END = b"PK\x05\x06"
 ZIP_TAIL = 22 + 65535
 POLICY_PATH = "docs/phase_scope.json"
+NOTE_NAME = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md")
+NOTE_KEYS = ("phase", "kind", "features")
 BOOTSTRAP_REQUIRED = 3
 
 
@@ -251,6 +255,10 @@ def load_policy(repo: str, ref: str) -> dict | None:
         and isinstance(features, dict)
         and features
         and all(isinstance(f, dict) and is_str_list(f.get("paths")) for f in features.values())
+        and (
+            "changes" not in policy
+            or (isinstance(policy["changes"], str) and policy["changes"].endswith("/"))
+        )
     ):
         raise CheckError(f"{ref}:{POLICY_PATH} is malformed")
     return policy
@@ -259,6 +267,54 @@ def load_policy(repo: str, ref: str) -> dict | None:
 def covered(path: str, patterns: list[str]) -> bool:
     """Exact file match, or prefix match for entries ending in '/'."""
     return any(path == p or (p.endswith("/") and path.startswith(p)) for p in patterns)
+
+
+def parse_note(text: str) -> tuple[dict, list[str]]:
+    """A change note's declaration: a header of phase, kind and features lines between two
+    '---' lines (features comma-separated, empty for a scope_update), then the note's text."""
+    lines = [line.strip() for line in text.split("\n")]
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return {}, ["the note must start with a header between two '---' lines"]
+    end = lines.index("---", 1)
+    declaration: dict = {}
+    problems = []
+    for line in lines[1:end]:
+        key, colon, value = (part.strip() for part in line.partition(":"))
+        if not colon or key not in NOTE_KEYS or key in declaration:
+            problems.append(f"unexpected header line {line[:60]!r}")
+        elif key == "features":
+            declaration[key] = [item.strip() for item in value.split(",") if item.strip()]
+        else:
+            declaration[key] = value
+    problems += [f"the header has no {key!r} line" for key in NOTE_KEYS if key not in declaration]
+    if not "".join(lines[end + 1 :]):
+        problems.append("the note has no text after its header")
+    return declaration, problems
+
+
+def note_declaration(repo: str, base: str, notes: str, findings: list[str]) -> tuple[dict, str]:
+    """The declaration in the one note this change adds under `notes`, and that note's path.
+    Notes already at the base are the record of earlier changes and never change."""
+    fields = git(
+        repo, "diff", "--name-status", "--no-relative", "--no-renames", "-z", f"{base}...HEAD"
+    )
+    fields = [f for f in fields.decode().split("\0") if f]
+    added = []
+    for status, path in zip(fields[0::2], fields[1::2], strict=True):
+        if path.startswith(notes):
+            if status == "A":
+                added.append(path)
+            else:
+                findings.append(f"the change note {path} exists at the base and cannot change")
+    if len(added) != 1:
+        findings.append(f"add exactly one change note under {notes} (found {len(added)})")
+        return {}, ""
+    path = added[0]
+    if not NOTE_NAME.fullmatch(path[len(notes) :]):
+        findings.append(f"the change note {path} must be named YYYY-MM-DD-short-name.md")
+    declaration, problems = parse_note(git(repo, "show", f"HEAD:{path}").decode(errors="replace"))
+    findings += [f"the change note {path}: {problem}" for problem in problems]
+    return declaration, path
 
 
 def run_phase(args: argparse.Namespace) -> int:
@@ -282,23 +338,28 @@ def run_phase(args: argparse.Namespace) -> int:
     active, guide, decl_path = policy["active_phase"], policy["guide"], policy["declaration"]
     diff = git(repo, "diff", "--name-only", "--no-relative", "--no-renames", "-z", f"{base}...HEAD")
     changed = [p for p in diff.decode().split("\0") if p]
-    findings = []
+    findings: list[str] = []
     if not exists(repo, "HEAD", guide):
         findings.append(f"the guide {guide} is missing at HEAD")
-    elif guide not in changed:
-        findings.append(f"the guide {guide} was not amended")
-    declaration = read_json(repo, "HEAD", decl_path)
-    if declaration is None:
-        findings.append(f"the declaration {decl_path} is missing at HEAD")
-        declaration = {}
-    elif decl_path not in changed:
-        findings.append(f"the declaration {decl_path} was not refreshed")
+    if "changes" in policy:
+        # The note replaces the guide edit and the declaration file; the guide may still change.
+        declaration, note = note_declaration(repo, base, policy["changes"], findings)
+        operational = [p for p in changed if p not in (guide, note)]
+    else:
+        if guide not in changed and exists(repo, "HEAD", guide):
+            findings.append(f"the guide {guide} was not amended")
+        declaration = read_json(repo, "HEAD", decl_path)
+        if declaration is None:
+            findings.append(f"the declaration {decl_path} is missing at HEAD")
+            declaration = {}
+        elif decl_path not in changed:
+            findings.append(f"the declaration {decl_path} was not refreshed")
+        operational = [p for p in changed if p not in (guide, decl_path)]
     kind, features = declaration.get("kind"), declaration.get("features", [])
     if not is_str_list(features):
         findings.append("features must be a list of feature IDs")
         features = []
 
-    operational = [p for p in changed if p not in (guide, decl_path)]
     scope = policy["scope_files"]
     if kind == "feature":
         if not features:

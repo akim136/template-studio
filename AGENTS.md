@@ -1,8 +1,12 @@
 # Agent rules: Homebase Template Studio
 
-The canonical guide is `docs/PROJECT_GUIDE.md`. Read it, `docs/phase_scope.json` and
-`docs/phase_change.json` before changing anything.
+The canonical guide is `docs/PROJECT_GUIDE.md`. Read it and `docs/phase_scope.json` before
+changing anything.
 
+- Each PR adds exactly one change note, `docs/changes/YYYY-MM-DD-short-name.md`. It starts with a
+  header of `phase`, `kind` (`feature` or `scope_update`) and comma-separated `features` lines
+  between two `---` lines, then says what changed and why. Notes already merged never change.
+  Amend the guide only when its rules or current state change.
 - Work only in the active phase. Keep one branch and one diff per PR stage. Stop after the phase's
   diff and tests. Never auto-merge or advance a phase.
 - Stack: Python 3.13, uv, FastAPI, Jinja/HTML/CSS and limited JS. No Node/Next.js backend and no

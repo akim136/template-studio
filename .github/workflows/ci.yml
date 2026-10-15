@@ -27,6 +27,21 @@ jobs:
       - name: Private-artifact scan (generic rules, all history)
         run: python3 scripts/check_repo.py private --all-history
 
+      # The guide's merge gate: the base revision's own checker, reading the base's policy.
+      - name: Phase check (base checker)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          checker=$(mktemp)
+          git show "$BASE:scripts/check_repo.py" > "$checker"
+          test -s "$checker"
+          python3 "$checker" phase --base "$BASE"
+
+      # The browser scripts are plain classic scripts; a syntax error fails here, not in a browser.
+      - name: Browser scripts parse
+        run: for f in static/*.js; do node --check "$f"; done
+
       # astral-sh/setup-uv v10.3.0, pinned to the uv that created uv.lock.
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
@@ -37,3 +52,27 @@ jobs:
       - run: uv run --locked ruff check .
       - run: uv run --locked ruff format --check .
       - run: uv run --locked pytest -q
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # actions/checkout v7.0.1.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # astral-sh/setup-uv v10.3.0, pinned to the uv that created uv.lock.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.9.11"
+          enable-cache: false
+
+      # Browser tests live in tests/e2e and skip unless STUDIO_E2E=1, so the check job only
+      # collects them. Until the first one lands, this job passes without installing a browser.
+      - name: Browser tests (Playwright, Chromium)
+        run: |
+          if [ ! -d tests/e2e ]; then echo "No browser tests yet."; exit 0; fi
+          uv sync --locked
+          uv run --locked playwright install --with-deps chromium
+          STUDIO_E2E=1 uv run --locked pytest -q tests/e2e

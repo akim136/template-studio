@@ -2,6 +2,7 @@
   "active_phase": "P4",
   "guide": "docs/PROJECT_GUIDE.md",
   "declaration": "docs/phase_change.json",
+  "changes": "docs/changes/",
   "scope_files": [
     "docs/phase_scope.json",
     "scripts/check_repo.py",
@@ -98,6 +99,44 @@
         "tests/ui/",
         "tests/analysis/",
         "docs/design-import.md"
+      ]
+    },
+    "F-P4d-docs": {
+      "summary": "Approved by Alex on October 15, 2026, after the demo: the project guide becomes a short guide to the current rules and state, with the decisions and the revision history in their own files, and each change is described in its own dated note under docs/changes/.",
+      "paths": [
+        "docs/",
+        "README.md",
+        "tests/test_repo_contract.py"
+      ]
+    },
+    "F-P4e-browser-tests": {
+      "summary": "Approved by Alex on October 15, 2026, after the demo: browser tests (Playwright) drive the local studio through setup, analyzing and the editor with synthetic PDFs. CI's browser job runs them; elsewhere they skip unless STUDIO_E2E=1.",
+      "paths": [
+        "tests/e2e/",
+        "pyproject.toml",
+        "uv.lock",
+        ".gitignore"
+      ]
+    },
+    "F-P4f-frontend-tidy": {
+      "summary": "Approved by Alex on October 15, 2026, after the demo: the plain-JS frontend is tidied in place: shared helpers instead of copies, no bundler and no framework switch, with the browser tests as the safety net.",
+      "paths": [
+        "static/",
+        "templates/",
+        "studio/ui/",
+        "tests/ui/",
+        "tests/e2e/"
+      ]
+    },
+    "F-P4g-inference": {
+      "summary": "Approved by Alex on October 15, 2026, after the demo: drafting changes measured offline first, starting with running the visual self-check (stage B) only on pages where the model drafted fields. Paid trials need Alex's approval.",
+      "paths": [
+        "studio/services/",
+        "studio/state/",
+        "eval/",
+        "tests/analysis/",
+        "tests/state/",
+        "tests/ui/"
       ]
     }
   }
