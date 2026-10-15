@@ -99,6 +99,15 @@
         "tests/analysis/",
         "docs/design-import.md"
       ]
+    },
+    "F-P4c-scanned-pages": {
+      "summary": "Scanned pages (Alex, October 15, 2026): lines and checkbox squares found in the rendered image of a page that is mostly an image and has no drawn rules or boxes become candidates, in plain Python with no new dependency, and a field the model placed with its own box is snapped onto a nearby one. Digital pages are unchanged; no OCR and no prompt change.",
+      "paths": [
+        "studio/services/raster.py",
+        "studio/services/candidates.py",
+        "studio/services/fields.py",
+        "tests/analysis/"
+      ]
     }
   }
 }
