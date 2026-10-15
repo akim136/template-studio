@@ -40,13 +40,13 @@ Vercel Authentication is off for production and previews. Sign in with Vercel (O
 
 ## 4. Demo instructions
 
-1. Sign in to the application with a Vercel account. Enter a sponsor name, title and signers, then upload a synthetic PDF.
+1. Sign in to the application with a Vercel account. Pick a sponsor from the 200 fictional demo customers, add a title and choose signers, then upload a synthetic PDF.
 2. On **Analyzing**, click **Start drafting**. Watch each page drafted, then checked. Page-level drafting proceeds with up to four concurrent requests while any Studio page is open.
 3. Review the AI overlays in the editor. Correct one field, save and reopen the revision.
 4. Confirm **I reviewed all N pages of revision R, including pages without fields**. If AI drafting left a page unchecked (a rotated page, for example), tick **I checked page N by hand** for each one first; approval is refused until every such page is confirmed. Approve, then make another change to demonstrate automatic approval invalidation.
 5. Reapprove and simulate template creation. Watch the create and verify steps. No HelloSign/Dropbox Sign API request is sent.
 
-Application source: `main` at `527b3ca`, with PRs #13–#29 and #31 merged as of **October 15, 2026**; its application code is the validated commit `b4a7dfd`. Local, preview and production evidence is listed separately in section 8.
+Application source: `main` at `60fa80a`, with PRs #13–#29, #31 and #34 merged as of **October 15, 2026**. The release `527b3ca` (PRs #13–#29 and #31) carries the application code of the validated commit `b4a7dfd`; #34 then replaced setup's typed sponsor fields with a picker of 200 fictional demo customers, each with a fixed account ID. Local, preview and production evidence is listed separately in section 8.
 
 ## 5. Rollout
 
@@ -71,16 +71,16 @@ Application source: `main` at `527b3ca`, with PRs #13–#29 and #31 merged as of
 **Claude Design:** Template Studio Clean v2.3 prototype, visual language and interaction handoff.  
 **Claude Code:** Application implementation, debugging, integration and tests.
 
-**Local (October 15, 2026, `b4a7dfd`):** 698 pytest tests, Ruff and the repository's privacy and phase checks pass, and GitHub CI is green on each merged PR. A local browser harness with synthetic PDFs and fake R2/Gateway exercised tab takeover, sign-out cleanup, malformed state, retry eligibility, save retry after a storage failure, the signing-provider redirect and completion-step timing.
+**Local (October 15, 2026, `b4a7dfd`):** 698 pytest tests, Ruff and the repository's privacy and phase checks pass, and GitHub CI is green on each merged PR. A local browser harness with synthetic PDFs and fake R2/Gateway exercised tab takeover, sign-out cleanup, malformed state, retry eligibility, save retry after a storage failure, the signing-provider redirect and completion-step timing. For #34 (`1ca15d3`, the same code as `60fa80a`): 700 pytest tests, Ruff and the privacy and phase checks pass, and a local browser run picked a customer, created a template and checked its title, summary and record.
 
-**Preview (October 15, 2026, `b4a7dfd`):** signed in, a synthetic 2-page PDF went through upload, a fresh draft, an edit, save, reload, review, approval, invalidation by a later save, and simulated create; a 3-page PDF whose rotated page AI left unchecked could not be approved until that page was confirmed by hand; a file that is not a PDF was refused.
+**Preview (October 15, 2026, `b4a7dfd`):** signed in, a synthetic 2-page PDF went through upload, a fresh draft, an edit, save, reload, review, approval, invalidation by a later save, and simulated create; a 3-page PDF whose rotated page AI left unchecked could not be approved until that page was confirmed by hand; a file that is not a PDF was refused. Alex tried #34's customer picker on its own preview.
 
-**Production (`527b3ca`):** signed in on studio.akbuilds.dev after the merges, the same synthetic PDFs went through a fresh draft, edit, save, reload, review, approval, invalidation by a later save, and simulated create. The rotated page had to be confirmed by hand, and a later save kept that record. A second tab on the same draft did not save it twice. Library filters, sign-out and sign-in, and the non-PDF refusal also passed, with no runtime errors logged.
+**Production (`527b3ca`):** signed in on studio.akbuilds.dev after the merges, the same synthetic PDFs went through a fresh draft, edit, save, reload, review, approval, invalidation by a later save, and simulated create. The rotated page had to be confirmed by hand, and a later save kept that record. A second tab on the same draft did not save it twice. Library filters, sign-out and sign-in, and the non-PDF refusal also passed, with no runtime errors logged. After #34 merged, production redeployed at `60fa80a` and its health check passed.
 
-**Not run:** a signed-in check from an account outside the team; hosted failure injection (save retry and storage errors are covered locally); hosted layout at 1024 and 390 px (checked locally at exact widths on the same code).
+**Not run:** a signed-in production check of #34's customer picker; a signed-in check from an account outside the team; hosted failure injection (save retry and storage errors are covered locally); hosted layout at 1024 and 390 px (checked locally at exact widths on the same code).
 
 **AI evaluation:** The same `studio.services.analysis` powers the app and `eval/`. Stage A proposes fields using PDF image/text/candidate evidence; Stage B checks the drawn overlay against the page. Keep initial suggestions, AI self-checks and human corrections distinct, with gold references outside the model's generation environment. A head-to-head with the earlier claude.ai skill workflow (Claude Opus) on held-out documents shows good progress toward internal use: the app drafted each document in a few minutes of processing, at a reported model cost under $1, but made more errors than Opus and needs more refinement to match it. The write-up and model decision are pending.
 
 **Still to do:** named reviewer access before any real document, separate preview data and credentials, agreed geometry tolerances, and live signing only through separately approved work.
 
-*Release snapshot of October 15, 2026, checked against `main` at `527b3ca` and its project guide. Signed-in checks ran in Alex's signed-in browser, driven by the coding session, which also ran the tests.*
+*Release snapshot of October 15, 2026, checked against `main` at `60fa80a` and its project guide. Signed-in checks ran in Alex's signed-in browser, driven by the coding session, which also ran the tests.*
