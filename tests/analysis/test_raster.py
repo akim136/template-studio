@@ -207,7 +207,7 @@ def test_a_page_of_box_edges_stops_after_a_bounded_number_of_checks(monkeypatch)
     assert len(checks) <= 500
 
 
-@pytest.mark.parametrize("scale", [2.0, 3.0])
+@pytest.mark.parametrize("scale", [1.0, 2.0, 3.0])
 def test_a_small_box_with_heavy_sides_is_not_closed_up_by_gap_bridging(scale):
     page = Canvas(scale)
     page.frame(20, 20, 5, stroke=2)  # one point of paper inside
@@ -219,6 +219,14 @@ def test_every_run_of_ink_counts_toward_the_limit_even_inside_a_bridged_run(monk
     dotted = b"\x00\x00\x00\x00\xff" * 40  # 40 runs of ink that bridge into one
     rows = [dotted] * 3 + [b"\xff" * 200] * 7
     found = raster.find(rows, 200, 10, 3.0, **LIMITS)
+    assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
+
+
+def test_short_runs_of_ink_count_toward_the_limit_too(monkeypatch):
+    monkeypatch.setattr(raster, "SEGMENT_LIMIT", 50)
+    specks = b"\x00\xff\xff\xff\xff\xff" * 60  # 60 one-pixel specks, too far apart to bridge
+    rows = [specks] + [b"\xff" * 360] * 9
+    found = raster.find(rows, 360, 10, 3.0, **LIMITS)
     assert found.note == "image scan stopped after 50 ink runs; nothing is reported"
 
 
