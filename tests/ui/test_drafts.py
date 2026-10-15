@@ -384,6 +384,7 @@ CHANGES = {
     "route": (drafts, "ROUTE", gateway.Route("openai/gpt-4.1", "byok", accept_fallback=True)),
     "rules": (inference, "RULES", inference.RULES + "\n- New."),
     "prompt": (inference, "STAGE_B", inference.STAGE_B + " Now."),
+    "check rule": (inference, "CHECK_RULE", inference.CHECK_RULE + " Now."),
 }
 
 

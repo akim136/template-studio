@@ -50,6 +50,8 @@ the rule sends to stage B keeps stage B's answer; any other page keeps stage A's
 Stage B can no longer add a field to a page where stage A drafted nothing. In the replay that never
 changed a score, and the review confirmation still covers every page.
 
-A hosted draft started before this change and continued after it mixes the two rules. Its frozen
-configuration (`prompts_sha256`) covers what the model is told, not this rule, so the draft
-continues, and each page's record names its own stage B status.
+A hosted draft records a hash of its configuration when it starts (`prompts_sha256`), and stops
+at its next step if the hash changes. That hash now also covers which pages stage B checks
+(`inference.CHECK_RULE`), so a draft started before this change stops at the deploy and offers a
+new draft, instead of mixing the two rules. A draft that already finished can still be applied.
+The header key keeps its name, so drafts recorded before still load.

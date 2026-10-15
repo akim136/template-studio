@@ -102,11 +102,11 @@ class RunConfig:
         return RULES.format(roles=roles, merges=", ".join(MERGE_NAMES))
 
     def prompts_sha256(self) -> str:
-        """A hash of what the model is told: the preflight, and both stage prompts with their
-        business rules, as the runner builds them."""
+        """A hash of what the model is told (the preflight, and both stage prompts with their
+        business rules, as the runner builds them) and of which pages stage B checks."""
         rules = self.rules()
         told = [PREFLIGHT_TEXT, STAGE_A.format(rules=rules), STAGE_B.format(rules=rules)]
-        return hashlib.sha256(json.dumps(told).encode()).hexdigest()
+        return hashlib.sha256(json.dumps([*told, CHECK_RULE]).encode()).hexdigest()
 
 
 @dataclass
@@ -137,12 +137,15 @@ class StageOutput:
 
 
 NOTHING_TO_CHECK = "NOT_NEEDED: stage A drafted no fields and rejected none"
+# Names the rule `needs_check` applies; the drafts' frozen hash includes it. Change it whenever
+# the rule changes, so a draft started under the old rule stops instead of mixing the two.
+CHECK_RULE = "stage B checks a page only where stage A drafted or rejected a field"
 
 
 def needs_check(stage_a: StageOutput) -> bool:
-    """Whether stage B checks a page: only when stage A drafted or rejected a field. Candidates
-    alone do not send a page; in an offline replay of 26 runs (October 15, 2026), stage B on
-    pages without a draft changed no score."""
+    """Whether stage B checks a page: only when stage A drafted or rejected a field (`CHECK_RULE`).
+    Candidates alone do not send a page; in an offline replay of 26 runs (October 15, 2026),
+    stage B on pages without a draft changed no score."""
     return bool(stage_a.fields or stage_a.rejected)
 
 
