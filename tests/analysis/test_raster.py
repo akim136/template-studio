@@ -132,6 +132,15 @@ def test_a_table_gives_its_rows_as_lines_and_no_boxes():
     assert found.boxes == []
 
 
+def test_rules_joined_by_a_heavy_border_give_no_line_between_them():
+    page = Canvas()
+    page.fill(20, 40, 260, 41)
+    page.fill(20, 60, 260, 61)
+    page.fill(20, 40, 23, 61)  # a border 3 points wide joins them into one shape
+    found = page.find()
+    assert all(top < 42 or top > 59 for _, top, _, _ in found.lines)
+
+
 def test_a_grey_noisy_scan_still_gives_its_line_and_box():
     page = Canvas(paper=215)
     noise = random.Random(7)
