@@ -38,14 +38,15 @@ page, the field editor.
 
 The spike is the library page in Next.js 16.4.2 (App Router, React 19.3.1), on branch
 `spike/next-frontend` under `spikes/next-frontend/`. It runs against the existing JSON API. It was
-measured locally on one Mac, with a production build and two templates, by `smoke.py` in the
-spike. Both frontends rendered the same rows. Next to each other, the pages looked the same,
-except that the spike leaves out the header's icons.
+measured locally on one Mac, with a production build, three templates and an unreadable one, by
+`smoke.py` in the spike. That script also checks that both frontends show the same rows for the
+whole library, a search and a filter. Next to each other, the pages looked the same, except that
+the spike leaves out the header's icons.
 
 | | Library today (FastAPI) | Library in Next.js |
 |---|---|---|
-| Script the browser runs | 1 file, 12.9 KB (4.5 KB gzip) | 6 files, 456 KB (132 KB gzip), plus 11 KB inline |
-| Median HTML response, 30 requests | 1.0 ms | 4.3 ms (it makes two API calls first) |
+| Script the browser runs | 1 file, 12.9 KB (4.5 KB gzip) | 6 files, 456 KB (132 KB gzip), plus 11 to 13 KB inline |
+| Median HTML response, 30 requests | 1.0 to 1.3 ms | 3.6 to 4.3 ms (it makes two API calls first) |
 | Install | nothing new | 30 npm packages, 375 MB on disk (the SWC compiler binary alone is 96 MB) |
 | Build | none | 2.8 s warm, 5.3 s cold |
 | Today's CSP, unchanged | works | 3 inline scripts blocked; the page never becomes interactive |
@@ -61,11 +62,19 @@ except that the spike leaves out the header's icons.
    - The API returns a status label, not its tab or chip colour. The spike had to copy those from
      `studio/state/lifecycle.py`.
    - It also had to port the library's filtering, sorting and paging from `pages.py`.
+   - The copies drifted at once. An unreadable template showed a signature mode instead of
+     "Unknown". Search lower-cased in JavaScript, so "STRASSE" did not find "Straße" as Python's
+     `casefold` does. Codex review found both, and `smoke.py` now compares the two pages' rows.
    - A switch either moves each page's view model into the API (new endpoints, written in Python
      and tested there) or keeps two copies in step.
-3. **Identity.** Next cannot read the session cookie without sharing the session secret. The
-   header's name and email need a small endpoint such as `GET /api/me`. Hosted mode was not
-   exercised.
+3. **Identity.**
+   - Next cannot read the session cookie without sharing the session secret. The header's name
+     and email need a small endpoint such as `GET /api/me`. Hosted mode was not exercised.
+   - Local mode's guard stops working behind Next. FastAPI checks the caller's address, and
+     behind Next that is always loopback, so a Next server reachable from the network would serve
+     saved state to anyone. Codex review found this. The spike now binds Next to 127.0.0.1 and
+     refuses any request whose `Host` or `Origin` is not loopback. `smoke.py` checks that both
+     are refused.
 4. **Configuration.** Next fixes rewrite destinations when it builds. The API's address is
    therefore a build setting, or the proxying moves into code that runs per request.
 5. **Hosting.** Vercel documents *services*: several apps in one project, with `vercel.json`
