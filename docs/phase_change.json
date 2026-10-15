@@ -2,7 +2,7 @@
   "phase": "P4",
   "kind": "feature",
   "features": [
-    "F-P3-solution-brief"
+    "F-P4b-release-evidence"
   ],
-  "summary": "The brief gets the Homebase tab icon, inlined so the page stays self-contained."
+  "summary": "The drafting rules map each merge name's document labels to a sender merge field and leave choice checkboxes optional (stage 5 screen follow-up; outside the stage 6 summary, for Alex to place)."
 }

@@ -17,6 +17,15 @@ COORDINATE_SPACE = "source_pt_top_left_72"
 TYPES = ("signature", "initials", "date_signed", "text", "text-merge", "checkbox", "checkbox-merge")
 MERGE_TYPES = ("text-merge", "checkbox-merge")
 MERGE_NAMES = ("name", "emailAddress", "homePhone", "email", "amount", "units")
+# The document labels each merge name fills, from the operator's existing template conventions.
+MERGE_LABELS = {
+    "name": "Full Name, Name, Investor Name, Printed Name",
+    "emailAddress": "Email, Email Address",
+    "homePhone": "Phone, Home Phone, Telephone, Phone Number",
+    "email": "a second email address",
+    "amount": "Commitment Amount, Investment Amount, $ Amount",
+    "units": "Number of Units, Units, Shares",
+}
 SENDER = "sender"
 # Provisional heights for a field that sits on a line, in points. Development values only.
 LINE_FIELD_HEIGHT = {"signature": 24.0, "initials": 20.0}
