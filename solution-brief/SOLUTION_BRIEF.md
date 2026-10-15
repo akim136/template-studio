@@ -79,7 +79,7 @@ Application source: `main` at `527b3ca`, with PRs #13–#29 and #31 merged as of
 
 **Not run:** a signed-in check from an account outside the team; hosted failure injection (save retry and storage errors are covered locally); hosted layout at 1024 and 390 px (checked locally at exact widths on the same code).
 
-**AI evaluation:** The same `studio.services.analysis` powers the app and `eval/`. Stage A proposes fields using PDF image/text/candidate evidence; Stage B checks the drawn overlay against the page. Keep initial suggestions, AI self-checks and human corrections distinct, with gold references outside the model's generation environment. A head-to-head with the earlier claude.ai skill workflow on held-out documents is in progress; no result yet.
+**AI evaluation:** The same `studio.services.analysis` powers the app and `eval/`. Stage A proposes fields using PDF image/text/candidate evidence; Stage B checks the drawn overlay against the page. Keep initial suggestions, AI self-checks and human corrections distinct, with gold references outside the model's generation environment. A head-to-head with the earlier claude.ai skill workflow (Claude Opus) on held-out documents shows good progress toward internal use: the app drafted each document in a few minutes of processing, at a reported model cost under $1, but made more errors than Opus and needs more refinement to match it. The write-up and model decision are pending.
 
 **Still to do:** named reviewer access before any real document, separate preview data and credentials, agreed geometry tolerances, and live signing only through separately approved work.
 

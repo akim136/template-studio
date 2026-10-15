@@ -63,7 +63,12 @@ check("no_private_repo_claim", "repo is private" not in text.lower())
 check("distinct_access", "Vercel Authentication is off" in text and "not authorization" in text)
 check("unchecked_page_ack", "each page AI left unchecked" in text)
 check("config_change_stop", "stops a running draft" in text)
-check("headtohead_not_done", "in progress; no result yet" in text)
+check(
+    "headtohead_status",
+    "made more errors than Opus" in text
+    and "in progress; no result yet" not in text
+    and "has finished; the write-up" not in text,
+)
 check("fluid_enabled_only", "Fluid Compute:" in text and "benefit not verified" in text)
 check("three_prim", len(soup.select(".choices-table tbody tr")) == 3)
 check("studio_cta", soup.select_one("#studio-cta").get("href") == STUDIO)
