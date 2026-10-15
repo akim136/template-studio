@@ -4,6 +4,11 @@ The model answers in image pixels and may anchor a field to a candidate. A field
 candidate takes the candidate's exact geometry from the PDF; otherwise its pixel box is converted
 to source points. Invalid fields are rejected with a reason and kept in the record, never dropped
 silently.
+
+On a scanned page the candidates were found in the page image, and the model often draws its own
+box instead of anchoring. Such a box is snapped onto the scanned line or square it clearly sits on:
+a field on a line keeps its own span within the line and sits on it at its height by type, and a
+checkbox takes the square. Shapes read from a digital page's objects are never snapped to.
 """
 
 from __future__ import annotations
@@ -21,6 +26,12 @@ SENDER = "sender"
 # Provisional heights for a field that sits on a line, in points. Development values only.
 LINE_FIELD_HEIGHT = {"signature": 24.0, "initials": 20.0}
 DEFAULT_LINE_FIELD_HEIGHT = 14.0
+CHECKBOX_TYPES = ("checkbox", "checkbox-merge")
+SNAP_LINE_SPAN = 0.6  # share of the box's width a scanned line must run under
+SNAP_LINE_GAP = 6.0  # points between the box's bottom and the line's
+SNAP_BOX_GAP = 4.0  # points between the centres of the box and a scanned square
+SNAP_BOX_RATIO = 2.0  # how much larger or smaller than the box, on each side, the square may be
+SNAP_MARGIN = 2.0  # points by which the nearest shape must beat the next, or none is taken
 
 
 def field_schema(roles: list[str]) -> dict:
@@ -74,7 +85,7 @@ class Field:
     height: float
     name: str | None
     candidate_id: str | None
-    geometry_source: str  # "candidate" or "model_box"
+    geometry_source: str  # "candidate", "snapped" or "model_box"
     evidence: str
 
     def to_checker(self, document_index: int = 0) -> dict:
@@ -105,7 +116,7 @@ def _geometry(raw, kind, candidate, scale, page_size):
     """(x, y, width, height, source) in points, or a reason string."""
     if candidate is not None and candidate.kind == "box":
         return candidate.x, candidate.y, candidate.width, candidate.height, "candidate"
-    if candidate is not None and kind not in ("checkbox", "checkbox-merge"):
+    if candidate is not None and kind not in CHECKBOX_TYPES:
         # A field on a line or underscore run sits on it: the line's span, a height by type.
         height = LINE_FIELD_HEIGHT.get(kind, DEFAULT_LINE_FIELD_HEIGHT)
         bottom = candidate.y + candidate.height
@@ -120,6 +131,39 @@ def _geometry(raw, kind, candidate, scale, page_size):
     if width <= 0 or height <= 0:
         return "the box has no area inside the page"
     return round(x, 2), round(y, 2), round(width, 2), round(height, 2), "model_box"
+
+
+def _snapped(kind, x, y, width, height, scanned: list[Candidate]):
+    """(x, y, width, height, "snapped") on the scanned line or square the box clearly sits on,
+    or None when there is none, or two are about as near."""
+    near = []  # (distance, candidate)
+    if kind in CHECKBOX_TYPES:
+        for c in scanned:
+            if c.kind != "box":
+                continue
+            ratios = (c.width / width, c.height / height)
+            if not all(1 / SNAP_BOX_RATIO <= ratio <= SNAP_BOX_RATIO for ratio in ratios):
+                continue
+            off = math.hypot(c.x + c.width / 2 - x - width / 2, c.y + c.height / 2 - y - height / 2)
+            if off <= SNAP_BOX_GAP:
+                near.append((off, c))
+    else:
+        for c in scanned:
+            if c.kind != "rule":
+                continue
+            under = min(x + width, c.x + c.width) - max(x, c.x)
+            off = abs(c.y + c.height - (y + height))
+            if under >= SNAP_LINE_SPAN * width and off <= SNAP_LINE_GAP:
+                near.append((off, c))
+    near.sort(key=lambda item: item[0])
+    if not near or (len(near) > 1 and near[1][0] - near[0][0] < SNAP_MARGIN):
+        return None
+    c = near[0][1]
+    if kind in CHECKBOX_TYPES:
+        return c.x, c.y, c.width, c.height, "snapped"
+    left, right = max(x, c.x), min(x + width, c.x + c.width)
+    tall = LINE_FIELD_HEIGHT.get(kind, DEFAULT_LINE_FIELD_HEIGHT)
+    return left, round(c.y + c.height - tall, 2), round(right - left, 2), tall, "snapped"
 
 
 def _number(value) -> bool:
@@ -160,6 +204,7 @@ def resolve(
 ) -> tuple[list[Field], list[Rejected]]:
     """Validate the model's fields for one page and place them in source points."""
     by_id = {candidate.id: candidate for candidate in candidates}
+    scanned = [candidate for candidate in candidates if candidate.from_image]
     fields, rejected = [], []
     for raw in raws:
         reason = _malformed(raw, roles)
@@ -183,6 +228,8 @@ def resolve(
         if isinstance(geometry, str):
             rejected.append(Rejected(page, raw, geometry))
             continue
+        if geometry[4] == "model_box" and scanned:
+            geometry = _snapped(kind, *geometry[:4], scanned) or geometry
         x, y, width, height, source = geometry
         fields.append(
             Field(
