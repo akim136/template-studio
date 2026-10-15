@@ -87,6 +87,8 @@ check("no_vercel_app_hosts", "vercel.app" not in html)
 check("no_pdf_links", not soup.select('a[href$=".pdf"]'))
 external = "script[src],link[rel=stylesheet],link[rel=preload]"
 check("no_external_assets", len(soup.select(external)) == 0)
+icon = soup.select_one('link[rel~="icon"]')
+check("inline_tab_icon", bool(icon) and icon.get("href", "").startswith("data:image/png;base64,"))
 ids = [node.get("id") for node in soup.select("[id]")]
 anchors = [a.get("href")[1:] for a in soup.select('a[href^="#"]')]
 check("all_targets_resolved", all(anchor in ids for anchor in anchors))

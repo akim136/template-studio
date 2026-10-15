@@ -4,5 +4,5 @@
   "features": [
     "F-P3-solution-brief"
   ],
-  "summary": "The brief brought up to main at 60fa80a after the demo customer picker (PR #34)."
+  "summary": "The brief gets the Homebase tab icon, inlined so the page stays self-contained."
 }
