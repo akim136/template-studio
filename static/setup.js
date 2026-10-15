@@ -10,6 +10,7 @@
   const root = document.querySelector("[data-setup]");
   if (!root) return;
   const $ = (selector) => root.querySelector(selector);
+  const { el, fact } = studio;
   const direct = root.dataset.upload === "direct";
   const maxBytes = Number(root.dataset.maxBytes);
   const ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
@@ -211,9 +212,7 @@
         ? "Complete: every page was read"
         : "INCOMPLETE: review and approval will stay blocked");
       for (const flag of state.source.flags) {
-        const item = document.createElement("li");
-        item.textContent = (flag.page ? `Page ${flag.page}: ` : "") + flag.reason;
-        flags.append(item);
+        flags.append(el("li", { text: (flag.page ? `Page ${flag.page}: ` : "") + flag.reason }));
       }
       flags.hidden = state.source.flags.length === 0;
     }
@@ -241,12 +240,10 @@
       label.hidden = !countersigner;
     });
     const required = policy().required;
-    $("[data-required-summary]").replaceChildren(...(required.length ? required : [null]).map((r) => {
-      const item = document.createElement("li");
-      item.className = r ? "chip tone-blue" : "chip tone-gray";
-      item.textContent = r ? requirement(r) : "Nothing: review is not blocked by required fields";
-      return item;
-    }));
+    $("[data-required-summary]").replaceChildren(...(required.length ? required : [null]).map((r) => el("li", {
+      class: r ? "chip tone-blue" : "chip tone-gray",
+      text: r ? requirement(r) : "Nothing: review is not blocked by required fields",
+    })));
     $("[data-mode-note]").textContent = MODE_NOTES[mode()];
     $("[data-title]").placeholder = defaultTitle() || "Defaults from the account and file name";
   }
@@ -269,30 +266,12 @@
       : "Nothing");
     const reasons = blockers();
     const list = $("[data-blockers]");
-    list.replaceChildren(...reasons.map((text) => {
-      const item = document.createElement("li");
-      item.textContent = text;
-      return item;
-    }));
+    list.replaceChildren(...reasons.map((text) => el("li", { text })));
     $("[data-create]").disabled = creating || reasons.length > 0;
   }
 
-  function fact(list, term, value, className) {
-    const dt = document.createElement("dt");
-    const dd = document.createElement("dd");
-    dt.textContent = term;
-    dd.textContent = value;
-    if (className) dd.className = className;
-    list.append(dt, dd);
-  }
-
   function button(label, onClick) {
-    const element = document.createElement("button");
-    element.type = "button";
-    element.className = "button button-small";
-    element.textContent = label;
-    element.addEventListener("click", onClick);
-    return element;
+    return el("button", { type: "button", class: "button button-small", text: label, onclick: onClick });
   }
 
   function mib(bytes) {
@@ -375,9 +354,7 @@
     reset();
     window.location.assign("/");
   });
-  window.addEventListener("beforeunload", (event) => {
-    if (["requesting", "uploading", "verifying"].includes(state.phase)) event.preventDefault();
-  });
+  studio.warnBeforeLeaving(() => ["requesting", "uploading", "verifying"].includes(state.phase));
 
   render();
 })();

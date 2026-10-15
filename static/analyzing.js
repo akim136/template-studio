@@ -22,8 +22,7 @@
   let watched = false; // this page saw the draft running, so it goes on to the editor when it ends
   let leaving = false;
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const { el, plural, sleep } = studio;
 
   // ---- what the draft shows ----
 
@@ -124,10 +123,8 @@
     const byReason = new Map(); // pages that stopped for the same reason share one line
     result.unfinished.forEach((item) => byReason.set(item.status, [...(byReason.get(item.status) || []), item.page]));
     const lines = [...byReason].map(([status, numbers]) => {
-      const line = document.createElement("li");
       const shown = numbers.length > 8 ? `${numbers.slice(0, 8).join(", ")} and ${numbers.length - 8} more` : numbers.join(", ");
-      line.textContent = `${numbers.length === 1 ? "Page" : "Pages"} ${shown}: ${status}`;
-      return line;
+      return el("li", { text: `${numbers.length === 1 ? "Page" : "Pages"} ${shown}: ${status}` });
     });
     const list = $("[data-unfinished]");
     list.replaceChildren(...lines);
@@ -324,9 +321,7 @@
   });
   // Calls still out when the page is left finish on the server, and any studio page carries the
   // draft on, so only a start or a save in flight asks first.
-  window.addEventListener("beforeunload", (event) => {
-    if (!leaving && busy !== "") event.preventDefault();
-  });
+  studio.warnBeforeLeaving(() => !leaving && busy !== "");
 
   (async () => {
     render();
