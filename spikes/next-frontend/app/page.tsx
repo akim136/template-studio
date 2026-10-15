@@ -59,7 +59,7 @@ function row(summary: Summary): Row {
     sponsorName: details.sponsor_name ?? "",
     sponsorAccountId: details.sponsor_account_id ?? "",
     countersigner: summary.countersigner ?? null, // an unreadable template has none
-    status: { label: summary.status, ...(STATUS[summary.status] ?? STATUS.Unreadable) },
+    status: { label: summary.status, ...(Object.hasOwn(STATUS, summary.status) ? STATUS[summary.status] : STATUS.Unreadable) },
     updated: summary.saved_at ?? "",
     attribution,
     error: summary.error,
@@ -94,7 +94,8 @@ export default async function Library({
   const params = await searchParams;
   const tab = TABS.some(([key]) => key === one(params.tab)) ? one(params.tab) : "all";
   const mode = MODES.some(([key]) => key === one(params.mode)) ? one(params.mode) : "all";
-  const sort = one(params.sort) in SORTS ? one(params.sort) : "updated";
+  // Own keys only: `in` would accept inherited names such as "constructor".
+  const sort = Object.hasOwn(SORTS, one(params.sort)) ? one(params.sort) : "updated";
   const order = ["asc", "desc"].includes(one(params.order)) ? one(params.order) : SORTS[sort];
   const q = one(params.q).split(/\s+/).filter(Boolean).join(" ").slice(0, 200);
   const view = { tab, q, mode, sort, order };

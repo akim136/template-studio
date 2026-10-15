@@ -13,8 +13,8 @@ unchanged (SPIKE_CSP=classic). It prints what each page rendered, its console er
 script bytes the browser ran.
 
 It exits non-zero if the Next server answers a request naming another host, if the two pages show
-different rows (all templates, a search that needs casefolding, a signature-mode filter), or if the
-Next page fails instead of saying so when FastAPI is down.
+different rows (all templates, a search that needs casefolding, a signature-mode filter, sorts
+that are not sorts), or if the Next page fails instead of saying so when FastAPI is down.
 """
 
 import gzip
@@ -199,7 +199,9 @@ def main() -> None:
                 results[f"next_{csp}"]["median_ms"] = timing(f"{base}/")
                 results[f"next_{csp}"]["foreign_host"] = foreign(base)
             parity = {}
-            for query in ("/", "/?q=STRASSE", "/?mode=lp"):
+            queries = ["/", "/?q=STRASSE", "/?mode=lp"]
+            queries += ["/?sort=__proto__", "/?sort=constructor"]  # not sorts: newest first
+            for query in queries:
                 ours = table(browser, f"{api}{query}")
                 theirs = table(browser, f"{bases['nonce']}{query}")
                 parity[query] = {"same": ours == theirs, "fastapi": len(ours), "next": len(theirs)}
