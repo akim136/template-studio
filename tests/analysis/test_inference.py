@@ -12,6 +12,7 @@ from pypdf.generic import RectangleObject
 
 from studio.services import gateway, inference
 from studio.services.analysis import analyze
+from studio.services.fields import MERGE_LABELS, MERGE_NAMES
 from studio.services.overlay import draw_boxes
 from studio.services.render import encode_png, render_png, render_rgb
 from studio.services.spend import SpendLedger
@@ -164,6 +165,20 @@ def test_rejected_final_fields_keep_the_run_partial(tmp_path):
     record = run(tmp_path, FakeGateway(answer=stages([], [INVALID])))
     assert record["status"] == "PARTIAL"
     assert [e["final_rejected"] for e in record["evidence"]] == [1, 0]  # prose: no check
+
+
+def test_the_rules_map_merge_labels_to_the_sender_and_leave_checkboxes_optional():
+    rules = CONFIG.rules()
+    assert set(MERGE_LABELS) == set(MERGE_NAMES)
+    for name in MERGE_NAMES:
+        assert f"{name} ({MERGE_LABELS[name]})" in rules
+    assert "never a text field for Client" in rules  # the first role's details come from the sender
+    assert (
+        "Mark a checkbox required only when the document says that box itself must be ticked"
+        in rules
+    )
+    stage_a = inference.STAGE_A.format(rules=rules)
+    assert inference.STAGE_B.format(rules=rules).endswith(rules) and stage_a.endswith(rules)
 
 
 def test_a_route_violation_outranks_any_other_stop_reason():

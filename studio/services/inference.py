@@ -36,6 +36,7 @@ from studio.services import gateway
 from studio.services.analysis import AnalysisResult
 from studio.services.candidates import PageCandidates, extract_candidates
 from studio.services.fields import (
+    MERGE_LABELS,
     MERGE_NAMES,
     Field,
     envelope,
@@ -59,7 +60,11 @@ RULES = """Business rules (provisional development policy):
 - Roles: {roles}. "sender" is the party that prepares the document before it is sent.
 - A merge field (text-merge, checkbox-merge) is filled by the sender from data and must use one
   of these merge names: {merges}. Every other field is completed by one of the roles.
-- Mark a field required only when the document shows it must be completed; otherwise false."""
+- The sender already holds {first}'s details below. A blank for one of them is a text-merge with
+  role sender and that merge name, never a text field for {first}: {labels}.
+- Mark a field required only when the document shows it must be completed; otherwise false.
+- A checkbox is a choice (check one, check all that apply, check if applicable), so it is not
+  required. Mark a checkbox required only when the document says that box itself must be ticked."""
 
 STAGE_A = """You place e-signature fields on one page of a PDF form.
 Find every place where a role must sign, initial, date, write or tick, and every value the sender
@@ -96,7 +101,10 @@ class RunConfig:
 
     def rules(self) -> str:
         roles = ", ".join(f"{role} (index {index})" for index, role in enumerate(self.roles))
-        return RULES.format(roles=roles, merges=", ".join(MERGE_NAMES))
+        labels = "; ".join(f"{name} ({MERGE_LABELS[name]})" for name in MERGE_NAMES)
+        return RULES.format(
+            roles=roles, merges=", ".join(MERGE_NAMES), first=self.roles[0], labels=labels
+        )
 
     def prompts_sha256(self) -> str:
         """A hash of what the model is told: the preflight, and both stage prompts with their
