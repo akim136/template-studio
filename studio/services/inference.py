@@ -50,7 +50,9 @@ from studio.services.spend import BudgetExceeded, SpendLedger
 PROFILE = "PROVISIONAL_DEVELOPMENT"
 MODEL_IMAGE_SHORT_SIDE = 768  # pixels: the size a high-detail page image is viewed at
 MAX_TEXT_CHARS = 8000  # page text beyond this is cut, and the cut is recorded
-MAX_OUTPUT_TOKENS = 6000
+# A page call's reasoning counts against this too: at 6000, gpt-5.4-mini spent all of it
+# reasoning on some dense pages and returned no answer, so the page failed.
+MAX_OUTPUT_TOKENS = 12000
 MAX_WORKERS = 4  # concurrent page calls: also the most pages a mid-run fallback can carry
 PREFLIGHT_TEXT = "Route check. Return an empty field list and empty notes."
 PREFLIGHT_OUTPUT_TOKENS = 1000
