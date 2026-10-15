@@ -4,12 +4,13 @@ test."""
 import socket
 import subprocess
 import sys
+import time
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
-from tests.e2e.conftest import ROOT, studio_env
+from tests.e2e.conftest import ROOT, read_port, stop, studio_env
 from tests.e2e.test_journey import create_template, follow
 
 # Runs the server module's entry point with the server replaced by an outbound connection attempt.
@@ -61,11 +62,21 @@ def test_the_server_holds_the_port_it_reports(tmp_path, monkeypatch) -> None:
         command, cwd=ROOT, env=studio_env(tmp_path), stdout=subprocess.PIPE, text=True
     )
     try:
-        port = int(process.stdout.readline())
+        port = int(read_port(process, time.monotonic() + 20))
         with socket.socket() as other, pytest.raises(OSError):
             other.bind(("127.0.0.1", port))
         assert not inherited.exists()
     finally:
-        process.terminate()
-        process.wait(timeout=10)
-        process.stdout.close()
+        stop(process)
+
+
+def test_a_studio_that_never_reports_its_port_fails_in_time() -> None:
+    command = [sys.executable, "-c", "import time; time.sleep(30)"]
+    silent = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="did not report its port"):
+            read_port(silent, started + 0.5)
+        assert time.monotonic() - started < 5
+    finally:
+        stop(silent)
