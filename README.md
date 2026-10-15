@@ -84,6 +84,8 @@ uv run --locked ruff format --check .
 uv run --locked pytest -q
 python3 scripts/check_repo.py private --all-history [--denylist /path/outside/repo]
 python3 scripts/check_repo.py phase --base main   # exit 3 = BOOTSTRAP_REQUIRED (manual gate)
+uv run --locked playwright install chromium        # once, for the browser tests
+STUDIO_E2E=1 uv run --locked pytest -q tests/e2e   # browser tests (skipped without STUDIO_E2E=1)
 ```
 
 Without `--denylist`, the private check applies only its generic rules: blocked file types and
