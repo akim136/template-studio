@@ -21,5 +21,8 @@ the new files, and the stale header line "Vercel Authentication protects all dep
 replaced by the current access state.
 
 `docs/phase_change.json` is removed: this note is the declaration. `tests/test_repo_contract.py`
-now reads the newest change note, with the checker's own parser, and a test covers a phase
-advance declared only in a note. The README points to the new files.
+now checks the policy against the note merged last, read with the checker's own parser. "Last"
+follows the first-parent history (merge order), not the notes' names, and when one merge brings
+several notes the highest phase among them is current. Tests cover a phase advance declared only
+in a note, same-day notes whose names sort out of order, and a merged stack. The README points to
+the new files.

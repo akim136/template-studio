@@ -1,6 +1,5 @@
 """The app, phase policy and docs must tell the same story in every phase."""
 
-import importlib.util
 import json
 import re
 import subprocess
@@ -9,12 +8,10 @@ from pathlib import Path
 import pytest
 
 import app
+from scripts.check_repo import parse_note
 from tests.repo_helpers import SCRIPT, Repo, git_env
 
 ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location("check_repo", SCRIPT)
-CHECKER = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(CHECKER)
 
 
 def read(path: str) -> str:
@@ -27,16 +24,27 @@ def assert_phase_contract(policy: dict, declaration: dict) -> None:
 
 
 def current_declaration(root: Path, policy: dict) -> dict:
-    """The newest change note's header, read with the checker's own parser, when the policy
-    names a changes directory; otherwise the old declaration file. Notes sort by their dated
-    names, so the newest is the last."""
+    """The declaration of the change note merged last, read with the checker's own parser, when
+    the policy names a changes directory; otherwise the old declaration file. "Last" follows the
+    first-parent history (merge order), not the notes' names. A merge can bring several notes at
+    once, such as a stack, and phases only advance, so the highest phase among them is current."""
     if "changes" not in policy:
         return json.loads((root / policy["declaration"]).read_text(encoding="utf-8"))
-    notes = sorted((root / policy["changes"]).glob("*.md"))
-    assert notes, f"no change note under {policy['changes']}"
-    declaration, problems = CHECKER.parse_note(notes[-1].read_text(encoding="utf-8"))
-    assert problems == [], (notes[-1].name, problems)
-    return declaration
+    log = subprocess.run(
+        ["git", "-C", str(root), "log", "--first-parent", "-m", "--diff-filter=A"]
+        + ["--name-only", "--format=%x00", "--", policy["changes"]],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+    added = next((c.split() for c in log.split("\0") if c.strip()), [])
+    assert added, f"no change note under {policy['changes']}"
+    declarations = []
+    for path in added:
+        declaration, problems = parse_note((root / path).read_text(encoding="utf-8"))
+        assert problems == [], (path, problems)
+        declarations.append(declaration)
+    return max(declarations, key=lambda d: int(d["phase"].removeprefix("P")))
 
 
 def test_policy_declaration_and_app_agree() -> None:
@@ -52,25 +60,48 @@ def test_contract_allows_a_scope_update_to_advance_the_phase() -> None:
     assert_phase_contract(policy, {"phase": "P1", "kind": "scope_update", "features": []})
 
 
-def test_the_newest_change_note_declares_the_phase_without_the_old_declaration(
-    tmp_path: Path,
-) -> None:
+def write_note(repo: Repo, name: str, phase: str, kind: str, features: str) -> str:
+    path = f"notes/{name}"
+    repo.write(path, f"---\nphase: {phase}\nkind: {kind}\nfeatures: {features}\n---\n\nWhy.\n")
+    return path
+
+
+@pytest.fixture
+def advanced(tmp_path: Path) -> tuple[Repo, dict]:
+    """A policy advanced to P5, with notes but no old declaration file."""
+    repo = Repo(tmp_path / "repo")
     policy = {
         **json.loads(read("docs/phase_scope.json")),
         "active_phase": "P5",
         "changes": "notes/",
     }
-    (tmp_path / "notes").mkdir()
-    for name, phase, kind, features in (
-        ("2026-10-15-docs.md", "P4", "feature", "F-P4d-docs"),
-        ("2026-10-16-advance.md", "P5", "scope_update", ""),
-    ):
-        header = f"---\nphase: {phase}\nkind: {kind}\nfeatures: {features}\n---\n\nWhy.\n"
-        (tmp_path / "notes" / name).write_text(header, encoding="utf-8")
+    repo.commit("docs", write_note(repo, "2026-10-15-docs.md", "P4", "feature", "F-P4d-docs"))
+    return repo, policy
 
-    declaration = current_declaration(tmp_path, policy)
+
+def test_the_note_merged_last_declares_the_phase_whatever_its_name(advanced) -> None:
+    repo, policy = advanced
+    repo.commit("fix", write_note(repo, "2026-10-16-zeta.md", "P4", "feature", "F-P4d-docs"))
+    repo.commit("advance", write_note(repo, "2026-10-16-advance.md", "P5", "scope_update", ""))
+
+    declaration = current_declaration(repo.root, policy)
 
     assert declaration == {"phase": "P5", "kind": "scope_update", "features": []}
+    assert_phase_contract(policy, declaration)
+
+
+def test_a_merge_that_brings_several_notes_declares_the_latest_phase(advanced) -> None:
+    repo, policy = advanced
+    repo.git("switch", "-q", "-c", "stack")
+    repo.commit("fix", write_note(repo, "2026-10-16-a-fix.md", "P4", "feature", "F-P4d-docs"))
+    repo.commit("advance", write_note(repo, "2026-10-16-advance.md", "P5", "scope_update", ""))
+    repo.git("switch", "-q", "main")
+    repo.commit("other", write_note(repo, "2026-10-16-zz-other.md", "P4", "feature", "F-P4d-docs"))
+    repo.git("merge", "-q", "--no-ff", "-m", "merge the stack", "stack")
+
+    declaration = current_declaration(repo.root, policy)
+
+    assert declaration["phase"] == "P5"
     assert_phase_contract(policy, declaration)
 
 
