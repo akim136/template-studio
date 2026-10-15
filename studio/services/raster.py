@@ -63,7 +63,7 @@ class Shapes:
 
 @dataclass(frozen=True)
 class _Band:
-    """One joined group of ink runs, in pixels: its span, rows, thickness and slope."""
+    """One joined group of ink runs, in pixels: its span, rows, thickness, reach and slope."""
 
     left: int
     right: int  # exclusive
@@ -71,6 +71,8 @@ class _Band:
     bottom: int  # exclusive
     centre: float  # mean row of its ink, weighted by run length
     thickness: int  # median count of inked rows per column
+    reach: int  # median rows from a column's first ink to its last; two rules joined by a bar
+    # have a thin count per column but a deep reach
     coverage: float  # share of its columns with any ink
     slope: float
 
@@ -162,11 +164,16 @@ def _measure(group: list[Segment]) -> _Band:
     left = min(start for _, start, _, _ in group)
     right = max(end for _, _, end, _ in group)
     steps = [0] * (right - left + 1)
+    first, last = [0] * (right - left), [0] * (right - left)
+    for y, _, _, inked in reversed(group):  # the group is in order of row
+        for start, end in inked:
+            first[start - left : end - left] = [y] * (end - start)
     weight = sum_x = sum_y = sum_xx = sum_xy = 0.0
     for y, _, _, inked in group:
         row = y + 0.5
         for start, end in inked:
             steps[start - left] += 1
+            last[start - left : end - left] = [y + 1] * (end - start)
             steps[end - left] -= 1
             n, mid = end - start, (start + end) / 2
             weight += n
@@ -180,6 +187,7 @@ def _measure(group: list[Segment]) -> _Band:
         if depth:
             inked.append(depth)
     inked.sort()
+    reach = sorted(b - a for a, b in zip(first, last, strict=True) if b)
     mean_x, mean_y = sum_x / weight, sum_y / weight
     spread = sum_xx / weight - mean_x * mean_x
     slope = (sum_xy / weight - mean_x * mean_y) / spread if spread > 1 else 0.0
@@ -190,6 +198,7 @@ def _measure(group: list[Segment]) -> _Band:
         bottom=max(y for y, *_ in group) + 1,
         centre=mean_y,
         thickness=inked[len(inked) // 2],
+        reach=reach[len(reach) // 2],
         coverage=len(inked) / (right - left),
         slope=slope,
     )
@@ -297,7 +306,7 @@ def find(
     for band in bands:
         if (
             band.right - band.left >= line_min * scale
-            and band.thickness <= LINE_MAX_THICKNESS * scale
+            and band.reach <= LINE_MAX_THICKNESS * scale
             and band.coverage >= LINE_COVERAGE
             and abs(band.slope) <= SLOPE_MAX
         ):
