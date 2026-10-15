@@ -74,7 +74,7 @@ uv run --locked python -m eval.infer SOURCE.pdf --model openai/gpt-4.1 --credent
 `eval.analyze` prints one JSON run record with the page inventory, evidence and flags. `eval.infer`
 drafts fields through the same gateway route rules as the app, with its own ledger and run cap.
 Both records contain source text, so keep them outside the repository. The route, fallback and
-budget rules are in the guide (section 9, "Model route").
+budget rules are in the session record's "Model route" row (`docs/history.md`).
 
 ## Checks
 
@@ -92,8 +92,12 @@ denylist of protected values stays outside Git.
 
 ## More
 
-- [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md): decisions, stages and gates, access, the
-  state and model-route rules, the session record and open decisions.
+- [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md): the rules (stages and gates, access, state,
+  analysis, phase control) and the current state.
+- [`docs/decisions.md`](docs/decisions.md): Alex's dated decisions and the items still open.
+- [`docs/changes/`](docs/changes/): one note per pull request, from October 15, 2026.
+- [`docs/history.md`](docs/history.md): the session record and revision table up to guide
+  1.0.14-repo.57, frozen.
 - [`docs/design-import.md`](docs/design-import.md): what was taken from the design prototype,
   and why.
 - `tests/state` and `tests/ui`: the exact `/api` behaviour, such as saves and conflicts, review and

@@ -1,6 +1,0 @@
-{
-  "phase": "P4",
-  "kind": "scope_update",
-  "features": [],
-  "summary": "Change notes replace the guide revision row and this file from the next PR on; CI runs the phase check, a JS syntax check and a browser-test job; four features for the post-demo repository work."
-}
