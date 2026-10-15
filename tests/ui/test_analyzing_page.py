@@ -21,6 +21,7 @@ def test_local_mode_says_where_drafting_runs_and_loads_no_driver(local, services
     page = local.get(f"/templates/{template['id']}/analyzing")
     assert page.status_code == 200
     assert "Field drafting runs on the hosted studio." in page.text
+    assert "the $20.00 spend cap is held in one ledger" in page.text  # the cap the code enforces
     assert "analyzing.js" not in page.text and "data-stages" not in page.text
     record = local.get(f"/templates/{template['id']}")
     assert "Field drafting runs on the hosted studio" in record.text
@@ -35,6 +36,7 @@ def test_the_hosted_page_shows_the_stages_and_loads_the_driver(signed_in, hosted
     for label in ("Upload verified", "Extract document", "Propose fields", "Validate draft"):
         assert label in page.text
     assert 'data-autostart="no"' in page.text and 'data-revision="1"' in page.text
+    assert 'data-cap="20.00"' in page.text
     assert "Fund II &lt;Subscription&gt;" in page.text and "<Subscription>" not in page.text
     # the title names the draft in the notices of drafting that goes on after this page is left
     assert 'data-title="Fund II &lt;Subscription&gt;"' in page.text

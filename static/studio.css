@@ -403,7 +403,7 @@ dialog .completion-lead { margin: 0; font-size: 14px; color: var(--ink); line-he
   border-bottom: 1px solid;
 }
 .banner strong { white-space: nowrap; }
-.banner span { flex: 1 1 260px; min-width: 0; }
+.banner span { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
 .banner-red { background: var(--red-0); color: var(--red-9); border-color: var(--red-2); }
 .banner-yellow { background: var(--yellow-0); color: var(--amber); border-color: var(--yellow-3); }
 .editor-body { flex: 1; min-height: 0; display: flex; }
@@ -534,6 +534,8 @@ dialog .completion-lead { margin: 0; font-size: 14px; color: var(--ink); line-he
 .issue strong { color: var(--ink); }
 .legend { font-size: 13px; }
 @media (max-width: 1100px) { .editor-pages { width: 140px; } .editor-inspector { width: 260px; } }
+/* The narrow rail has no room for both filters side by side; the strip below 900 px does */
+@media (max-width: 1100px) and (min-width: 901px) { .editor-pages .segmented { flex-direction: column; } }
 .editor-bar [data-revision] { white-space: nowrap; }
 /* Tablet: the pages become a strip above the canvas and the inspector */
 @media (max-width: 900px) {

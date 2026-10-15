@@ -38,6 +38,9 @@ VIEW_SCALE = 2.0  # 144 DPI: sharp in the editor up to 150% zoom on a standard s
 MAX_VIEW_PIXELS = 8_000_000  # a larger page is shown at a lower scale
 
 
+UNREADABLE = "This file isn't a readable PDF."
+
+
 class SourceError(ValueError):
     """The upload is not a source that can be sealed."""
 
@@ -61,7 +64,8 @@ def seal(store: ObjectStore, data: bytes) -> dict:
     try:
         result = analyze(data)
     except AnalysisError as error:
-        raise SourceError(str(error)) from None
+        message = str(error)  # a parser's exception text stays in the analysis record only
+        raise SourceError(UNREADABLE if message.startswith("unreadable PDF") else message) from None
     measured = {page.page: page for page in extract_candidates(data, pages=[])}
     pages = []
     for page in result.pages:

@@ -86,6 +86,24 @@ def test_the_listing_is_newest_first_and_marks_an_unreadable_template(services, 
     assert len(rows) == 3  # names that are not template ids are skipped
 
 
+def test_an_unreadable_row_keeps_storage_internals_in_the_server_log(
+    services, clock, monkeypatch, capsys
+):
+    source = sources.seal(services.store, two_page_pdf())
+    made = services.templates.create(source["sha256"], POLICY)
+    real = services.store.get
+
+    def failing(key):
+        if key.endswith("head.json"):
+            raise StorageError(f"cannot read {key}: R2 answered 500")
+        return real(key)
+
+    monkeypatch.setattr(services.store, "get", failing)
+    row = services.templates.summaries()[0]
+    assert row["id"] == made["id"] and lifecycle.status(row).label == "Unreadable"
+    assert row["error"] == "storage failed" and "R2 answered 500" in capsys.readouterr().err
+
+
 def test_the_api_lists_templates_with_their_labels(local):
     sealed = local.post("/api/sources", content=two_page_pdf()).json()
     body = {"source_sha256": sealed["sha256"], "policy": POLICY}

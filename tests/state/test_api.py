@@ -167,6 +167,38 @@ def test_a_storage_failure_on_a_read_says_to_reload(client, template, services, 
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert detail.startswith("storage failed; reload and try again") and "saved" not in detail
+    assert "head.json" not in detail and "Input/output" not in detail
+
+
+def test_a_storage_failure_keeps_its_internals_in_the_server_log(
+    client, template, services, monkeypatch, capsys
+):
+    def failing(key, data, etag):
+        raise StorageError("cannot write templates/x/head.json: R2 answered 500")
+
+    monkeypatch.setattr(services.store, "replace", failing)
+    response = save(client, template["id"], 1, [field()])
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "may or may not have been saved" in detail and "R2 answered" not in detail
+    assert "cannot write templates/x/head.json: R2 answered 500" in capsys.readouterr().err
+
+
+def test_a_storage_failure_the_operator_must_act_on_keeps_its_instruction(
+    client, template, services, monkeypatch, capsys
+):
+    def failing(template_id, revision, bound):
+        internal = "cannot write templates/x/orphans/index.json: R2 answered 500"
+        public = "operation op-1 was not kept: resolve by hand"
+        raise StorageError(f"{public} ({internal})", public=public)
+
+    monkeypatch.setattr(services.operations, "create", failing)
+    url = f"/api/templates/{template['id']}"
+    response = client.post(f"{url}/operation", json=bound(template))
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "op-1 was not kept: resolve by hand" in detail and "R2 answered" not in detail
+    assert "R2 answered 500" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

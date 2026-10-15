@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -7,7 +8,7 @@ from studio.services.analysis import analyze
 from studio.state import drafts, lifecycle, sources
 from studio.state.drafts import Drafts, Unavailable
 from studio.state.errors import Conflict, Invalid
-from studio.state.ledger import HEAD, StoreLedger
+from studio.state.ledger import CAP_USD, HEAD, StoreLedger
 from studio.state.store import canonical
 from tests.analysis.fake_gateway import FakeGateway, page_of
 from tests.analysis.pdf_factory import make_pdf
@@ -324,8 +325,11 @@ def test_an_earlier_apply_record_still_reads_as_an_outcome(book, template, servi
     assert book.outcome(template["id"], draft["id"], 2)["unfinished"] == []
 
 
+NEAR_CAP = str(CAP_USD - Decimal("2.28"))  # with the $2.276604 opening, $0.003396 short of the cap
+
+
 def test_a_draft_that_would_pass_the_cap_stops_before_sending(book, template, services):
-    head = {"opening_usd": "2.276604", "settled_usd": "7.72", "open": {}, "runs": {}}
+    head = {"opening_usd": "2.276604", "settled_usd": NEAR_CAP, "open": {}, "runs": {}}
     services.store.put_new(HEAD, canonical(head))
     draft = book.start(template["id"], 1, "anonymous")
     gateway_ = fake()
@@ -554,7 +558,7 @@ def test_a_page_call_that_would_pass_the_cap_stops_the_draft(book, template, ser
     gateway_ = fake()
     book.step(template["id"], draft["id"], "t", gateway_)  # the preflight passes
     stored = services.store.get(HEAD)
-    head = json.loads(stored.data) | {"settled_usd": "7.72"}
+    head = json.loads(stored.data) | {"settled_usd": NEAR_CAP}
     services.store.replace(HEAD, canonical(head), stored.etag)
     view = book.step(template["id"], draft["id"], "t", gateway_)
     assert len(gateway_.chat_bodies()) == 1  # only the preflight was sent

@@ -11,7 +11,7 @@ P3, the core interface. Working today:
 
 - Library, setup, Analyzing, field editor and record pages.
 - Field drafting on the hosted studio only: each page is drafted and then checked by one model
-  call each, within a $10 spend cap. Drafting goes on while any studio page is open. A finished
+  call each, within a $20 spend cap. Drafting goes on while any studio page is open. A finished
   draft saves itself, and the template then needs review. Local mode does not draft.
 - Saved revisions; review and approval bound to one revision; and a create through a **simulated**
   signing adapter. There is no real signing provider.

@@ -39,8 +39,9 @@ def test_page_sizes_are_the_visible_area_fields_are_placed_in(services):
 
 
 def test_nothing_is_stored_for_a_file_that_cannot_be_read(services, tmp_path):
-    with pytest.raises(sources.SourceError, match="unreadable PDF"):
+    with pytest.raises(sources.SourceError) as refused:
         sources.seal(services.store, b"%PDF-1.7 not really")
+    assert str(refused.value) == "This file isn't a readable PDF."  # no parser internals
     assert not (tmp_path / "state" / "sources").exists()
 
 

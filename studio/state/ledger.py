@@ -26,7 +26,7 @@ from studio.state.store import ObjectStore, PreconditionFailed, StorageError, ca
 HEAD = "spend/head.json"
 ROWS = "spend/rows"
 OPENING_USD = Decimal("2.276604")
-CAP_USD = Decimal("10")  # Alex's authorization, October 11, 2026
+CAP_USD = Decimal("20")  # Alex's authorization, October 15, 2026 (was $10 from October 11)
 ATTEMPTS = 8  # reads of the head before a busy ledger gives up
 
 

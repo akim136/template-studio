@@ -443,6 +443,9 @@ def test_an_orphan_that_cannot_be_kept_is_named_in_the_error(
         create(operations, approved)
     assert adapter.calls[0] in str(raised.value)
     assert "check its status" not in str(raised.value)  # a check would see the replacement
+    public = raised.value.public  # what the browser is told names the operation, not the store
+    assert adapter.calls[0] in public and "resolve by hand" in public
+    assert "No space left" not in public
 
 
 def test_a_create_that_keeps_losing_to_other_writers_points_to_a_status_check(
@@ -671,8 +674,9 @@ def test_a_failure_to_record_the_outcome_points_to_a_status_check(
 
     with monkeypatch.context() as patch:
         patch.setattr(services.store, "replace", failing)
-        with pytest.raises(StorageError, match="the create was sent.*check its status"):
+        with pytest.raises(StorageError, match="the create was sent.*check its status") as raised:
             create(operations, approved)
+    assert "check its status" in raised.value.public and "No space" not in raised.value.public
     assert operations.get(approved["id"])["state"] == CREATING
     assert operations.check_status(approved["id"])["state"] == CREATED
 

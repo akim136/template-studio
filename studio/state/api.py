@@ -63,7 +63,7 @@ from studio.state.drafts import Drafts, Unavailable
 from studio.state.errors import Conflict, Invalid, NotFound
 from studio.state.r2 import UPLOAD_EXPIRY_S, Credentials, R2ObjectStore
 from studio.state.signing import ORPHANED, Operations, SimulatedSigningAdapter
-from studio.state.store import LocalObjectStore, ObjectStore, StorageError
+from studio.state.store import LocalObjectStore, ObjectStore, StorageError, log_failure
 from studio.state.templates import ACTOR, Templates
 
 STATE_DIR_ENV = "STUDIO_STATE_DIR"
@@ -385,10 +385,13 @@ def _call(action: Callable[..., Any], *args: Any, writes: bool = True) -> Any:
     except Unavailable as error:
         raise HTTPException(503, str(error)) from None
     except StorageError as error:
+        log_failure(error)
+        if error.public:  # what the operator must act on, such as an operation to resolve by hand
+            raise HTTPException(503, f"storage failed: {error.public}") from None
         if not writes:
-            raise HTTPException(503, f"storage failed; reload and try again: {error}") from None
+            raise HTTPException(503, "storage failed; reload and try again") from None
         detail = "storage failed; this request may or may not have been saved, so reload"
-        raise HTTPException(503, f"{detail} before retrying: {error}") from None
+        raise HTTPException(503, f"{detail} before retrying") from None
 
 
 async def _seal(store: ObjectStore, data: bytes) -> dict:
@@ -461,7 +464,8 @@ async def page_image(sha256: str, page: int, request: Request) -> Response:
     except NotFound:
         raise HTTPException(404, "no such sealed source or page") from None
     except StorageError as error:
-        raise HTTPException(503, f"storage failed; reload and try again: {error}") from None
+        log_failure(error)
+        raise HTTPException(503, "storage failed; reload and try again") from None
     except ValueError as error:
         raise HTTPException(422, f"this page could not be rendered: {error}") from None
     headers = {"cache-control": PAGE_CACHE, "x-content-type-options": "nosniff"}
