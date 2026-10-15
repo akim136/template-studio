@@ -15,7 +15,7 @@ from studio.services.analysis import analyze
 from studio.services.overlay import draw_boxes
 from studio.services.render import encode_png, render_png, render_rgb
 from studio.services.spend import SpendLedger
-from tests.analysis.fake_gateway import FakeGateway, page_of
+from tests.analysis.fake_gateway import FakeGateway, first_candidate_answer, page_of
 from tests.analysis.test_fields import FORM
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -160,8 +160,22 @@ def test_a_draft_whose_fields_were_all_rejected_is_still_checked(tmp_path):
     assert len(record["stage_a"]["rejected"]) == 2 and record["status"] == "COMPLETE"
 
 
+def test_a_page_whose_draft_is_empty_is_not_checked_even_with_candidates(tmp_path):
+    fake = FakeGateway(answer=stages([], []))
+    record = run(tmp_path, fake, config=SERIAL)
+    form, prose = record["evidence"]
+    assert form["candidates"] > 0
+    assert form["stage_b"] == prose["stage_b"] == inference.NOTHING_TO_CHECK
+    assert form["inspected"] and prose["inspected"] and record["status"] == "COMPLETE"
+    assert page_calls(fake) == [1, 2]  # stage A only
+
+
 def test_rejected_final_fields_keep_the_run_partial(tmp_path):
-    record = run(tmp_path, FakeGateway(answer=stages([], [INVALID])))
+    def answer(body):  # stage A drafts the form page's signature; stage B answers an invalid field
+        draft = first_candidate_answer(body)
+        return {**draft, "fields": [INVALID]} if "changes" in draft else draft
+
+    record = run(tmp_path, FakeGateway(answer=answer))
     assert record["status"] == "PARTIAL"
     assert [e["final_rejected"] for e in record["evidence"]] == [1, 0]  # prose: no check
 

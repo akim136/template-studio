@@ -6,7 +6,8 @@ development choices, not an agreed case policy.
 What the model receives, per page and nothing else: the instructions and business rules in this
 module, the page image rendered from the source, the page's text layer, and the page's
 candidates. Stage B also receives its own stage A fields and the same image with those fields
-drawn on it. No file other than the source is read to build a request, and no tools are offered.
+drawn on it; it runs only on a page where stage A drafted or rejected a field. No file other
+than the source is read to build a request, and no tools are offered.
 
 Before any page is sent, one preflight call with no page content proves the route. The gateway
 cannot be told to refuse a fallback from Alex's key to Vercel's credentials, so the route is
@@ -101,11 +102,11 @@ class RunConfig:
         return RULES.format(roles=roles, merges=", ".join(MERGE_NAMES))
 
     def prompts_sha256(self) -> str:
-        """A hash of what the model is told: the preflight, and both stage prompts with their
-        business rules, as the runner builds them."""
+        """A hash of what the model is told (the preflight, and both stage prompts with their
+        business rules, as the runner builds them) and of which pages stage B checks."""
         rules = self.rules()
         told = [PREFLIGHT_TEXT, STAGE_A.format(rules=rules), STAGE_B.format(rules=rules)]
-        return hashlib.sha256(json.dumps(told).encode()).hexdigest()
+        return hashlib.sha256(json.dumps([*told, CHECK_RULE]).encode()).hexdigest()
 
 
 @dataclass
@@ -133,6 +134,19 @@ class StageOutput:
     notes: str
     changes: list[str] | None
     raw: str
+
+
+NOTHING_TO_CHECK = "NOT_NEEDED: stage A drafted no fields and rejected none"
+# Names the rule `needs_check` applies; the drafts' frozen hash includes it. Change it whenever
+# the rule changes, so a draft started under the old rule stops instead of mixing the two.
+CHECK_RULE = "stage B checks a page only where stage A drafted or rejected a field"
+
+
+def needs_check(stage_a: StageOutput) -> bool:
+    """Whether stage B checks a page: only when stage A drafted or rejected a field (`CHECK_RULE`).
+    Candidates alone do not send a page; in an offline replay of 26 runs (October 15, 2026),
+    stage B on pages without a draft changed no score."""
+    return bool(stage_a.fields or stage_a.rejected)
 
 
 class _Stop:
@@ -378,9 +392,9 @@ class Runner:
         self, evidence: PageEvidence, prepared: Prepared, stage_a: StageOutput
     ) -> StageOutput | None:
         """The self-check of one page's first draft; None, with the reason in evidence, when it
-        failed. A page with nothing drafted, rejected or proposed needs no check."""
-        if not stage_a.fields and not stage_a.rejected and not prepared.candidates:
-            evidence.stage_b = "NOT_NEEDED: no draft fields, no rejected fields, no candidates"
+        failed. A page whose draft has no field, accepted or rejected, needs no check."""
+        if not needs_check(stage_a):
+            evidence.stage_b = NOTHING_TO_CHECK
             evidence.inspected = True
             return StageOutput([], [], "", [], "")
         scale = prepared.scale
