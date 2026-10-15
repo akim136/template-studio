@@ -179,6 +179,16 @@ def test_the_record_page_shows_saved_state(local, services, clock):
     assert created["source_sha256"][:12] in page.text
 
 
+def test_the_record_page_says_which_pages_drafting_left_unchecked(local, services, clock):
+    created = make(services, clock, "Fund II - Subscription")
+    drafted, _ = services.templates.save(created["id"], 1, POLICY, [field()], unchecked=[2])
+    page = local.get(f"/templates/{created['id']}")
+    assert "AI drafting was partial (revision 2): page 2 had no checked answer." in page.text
+    services.templates.confirm_review(created["id"], 2, drafted["binding"], "a", [2])
+    page = local.get(f"/templates/{created['id']}")
+    assert "Page 2 checked by hand by a" in page.text
+
+
 @pytest.mark.parametrize("template_id", ["a" * 32, "not-an-id"])
 def test_the_record_page_for_an_unknown_template_is_404(local, template_id):
     page = local.get(f"/templates/{template_id}")

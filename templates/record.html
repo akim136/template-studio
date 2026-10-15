@@ -32,6 +32,14 @@
         <dt>Revision</dt><dd>{{ template.revision }} · saved {{ template.saved_at | when }}</dd>
         <dt>Review</dt><dd>{% if template.review %}Confirmed by {{ template.review.by }} · {{ template.review.at | when }}{% else %}Not confirmed{% endif %}</dd>
         <dt>Approval</dt><dd>{% if template.approval %}Approved by {{ template.approval.by }} · {{ template.approval.at | when }}{% else %}Not approved{% endif %}</dd>
+        {% if template.unchecked %}
+          {% set left = template.unchecked.pages %}
+          {% set named = (left[:-1] | join(', ')) ~ ' and ' ~ left[-1] if left | length > 1 else left[0] %}
+          {% set which = 'pages' if left | length > 1 else 'page' %}
+          <dt>AI drafting</dt>
+          <dd>AI drafting was partial (revision {{ template.unchecked.revision }}): {{ which }} {{ named }} had no checked answer.
+            {% if template.review and template.review.checked_pages %}{{ which | capitalize }} {{ named }} checked by hand by {{ template.review.by }}.{% else %}The review must confirm {{ 'each' if left | length > 1 else 'it' }} as checked by hand.{% endif %}</dd>
+        {% endif %}
         <dt>Signing operation</dt>
         <dd>{% if operation %}{{ operation.state | replace('_', ' ') | lower | capitalize }} · revision {{ operation.revision }} · <span class="mono">{{ operation.id[:12] }}</span>{% else %}None{% endif %}</dd>
       </dl>

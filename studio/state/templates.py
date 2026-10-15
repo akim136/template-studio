@@ -28,6 +28,11 @@ and create: every snapshot shows the source's inventory and flags, so the user s
 missing (Alex's rule: anything incomplete is flagged to the user). A template keeps its source,
 so such a template stays blocked; a complete source needs a new template.
 
+Pages that AI drafting left without a checked answer stay on the record of every later revision
+until a newer draft is applied (Alex, October 13, 2026): a save made by hand keeps them. A review
+must confirm each of them as checked by hand, and approval is refused, naming the pages, while any
+is not confirmed. A revision saved before this record existed has none.
+
 `summaries` lists every template for the library from its head, its current revision and its
 signing operation, without reading any source.
 """
@@ -38,7 +43,7 @@ import hashlib
 import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -97,6 +102,16 @@ def parse_details(raw: object) -> dict:
     return details
 
 
+def _unchecked(left: dict, pages: list[int], sentence: str) -> str:
+    """`sentence` with {pages} as 'page 2' or 'pages 2 and 5', then why they need checking."""
+    if pages[1:]:
+        named, them = "pages " + ", ".join(map(str, pages[:-1])) + f" and {pages[-1]}", "them"
+    else:
+        named, them = f"page {pages[0]}", "it"
+    why = f"AI drafting (revision {left['revision']}) left {them} without a checked answer"
+    return f"{sentence.format(pages=named)}: {why}"
+
+
 class Templates:
     def __init__(self, store: ObjectStore, clock: Callable[[], datetime]) -> None:
         self.store = store
@@ -150,9 +165,12 @@ class Templates:
         fields: object,
         save_id: str | None = None,
         details: object = None,
+        unchecked: list[int] | None = None,
     ) -> tuple[dict, bool]:
         """Returns the saved snapshot and whether this call made a new revision. Without
-        details, the base revision's details are kept."""
+        details, the base revision's details are kept. `unchecked` is given only by an applied
+        draft: the pages it left without a checked answer. Without it, the base revision's
+        record of them is kept."""
         if save_id is not None and not (isinstance(save_id, str) and SAVE_ID.fullmatch(save_id)):
             raise Invalid(["save_id is 8 to 64 letters, digits, '-' or '_'"])
         head, etag = self.head(template_id)
@@ -163,7 +181,11 @@ class Templates:
         if errors:
             raise Invalid(errors)
         for _ in range(SAVE_ATTEMPTS):
-            kept = typed if typed is not None else self._details(head)
+            base = self._revision(head)
+            kept = typed if typed is not None else base.get("details", DETAILS)
+            left = base.get("unchecked") if unchecked is None else None
+            if unchecked:
+                left = {"revision": head["revision"] + 1, "pages": sorted(set(unchecked))}
             bound = binding(head["source_sha256"], parsed.to_dict(), fields, kept)
             if head["revision"] != base_revision:
                 landed = head["revision"] == base_revision + 1 and head["binding"] == bound
@@ -172,7 +194,7 @@ class Templates:
                 raise Conflict(MOVED, self.snapshot(head))
             try:
                 current = (head, etag)
-                args = (template_id, current, None, parsed, fields, kept, save_id)
+                args = (template_id, current, None, parsed, fields, kept, save_id, left)
                 committed = self._commit(*args)
             except PreconditionFailed:
                 head, etag = self.head(template_id)
@@ -180,8 +202,17 @@ class Templates:
             return self.snapshot(committed), True
         raise Conflict(MOVED, self.snapshot(head))
 
-    def confirm_review(self, template_id: str, revision: int, bound: str, by: str = ACTOR) -> dict:
-        return self._sign_off(template_id, revision, bound, "review", by)
+    def confirm_review(
+        self,
+        template_id: str,
+        revision: int,
+        bound: str,
+        by: str = ACTOR,
+        checked_pages: Sequence[int] = (),
+    ) -> dict:
+        """`checked_pages`: the pages drafting left unchecked that the reviewer checked by hand.
+        They must be exactly those pages."""
+        return self._sign_off(template_id, revision, bound, "review", by, list(checked_pages))
 
     def approve(self, template_id: str, revision: int, bound: str, by: str = ACTOR) -> dict:
         return self._sign_off(template_id, revision, bound, "approval", by)
@@ -224,18 +255,40 @@ class Templates:
             "saved_at": revision["saved_at"],
             "review": head["review"],
             "approval": head["approval"],
+            "unchecked": revision.get("unchecked"),
         }
 
-    def _sign_off(self, template_id: str, revision: int, bound: str, kind: str, by: str) -> dict:
+    def _sign_off(
+        self,
+        template_id: str,
+        revision: int,
+        bound: str,
+        kind: str,
+        by: str,
+        checked: list[int] | None = None,
+    ) -> dict:
         head, etag = self.head(template_id)
         snapshot = self._current(head, revision, bound)
         if snapshot["issues"]:
             raise Invalid(snapshot["issues"])
         if kind == "approval" and head["review"] is None:
             raise Invalid(["the review of this revision is not confirmed"])
+        left = snapshot["unchecked"] or {"revision": None, "pages": []}
+        if kind == "approval":
+            missing = sorted(set(left["pages"]) - set(head["review"].get("checked_pages", [])))
+            if missing:
+                sentence = "the review did not confirm {pages} as checked by hand"
+                raise Invalid([_unchecked(left, missing, sentence)])
         if head[kind] is not None:
             return snapshot  # already given to this revision
+        if kind == "review" and sorted(set(checked or [])) != left["pages"]:
+            if not left["pages"]:
+                raise Invalid(["no page of this revision is waiting to be checked by hand"])
+            sentence = "confirm that you checked {pages} by hand"
+            raise Invalid([_unchecked(left, left["pages"], sentence)])
         given = {"revision": revision, "binding": bound, "at": self._now(), "by": by}
+        if kind == "review" and left["pages"]:
+            given["checked_pages"] = left["pages"]
         updated = {**head, kind: given}
         try:
             self.store.replace(f"templates/{template_id}/head.json", canonical(updated), etag)
@@ -262,6 +315,7 @@ class Templates:
         fields: list[dict],
         details: dict,
         save_id: str | None = None,
+        unchecked: dict | None = None,
     ) -> dict:
         previous = current[0] if current else None
         source = previous["source_sha256"] if previous else source_sha256
@@ -275,6 +329,8 @@ class Templates:
             "fields": fields,
             "saved_at": self._now(),
         }
+        if unchecked:
+            revision["unchecked"] = unchecked
         name = digest(revision)
         try:
             key = f"templates/{template_id}/revisions/{name}.json"
@@ -310,9 +366,6 @@ class Templates:
         if stored is None or hashlib.sha256(stored.data).hexdigest() != head["object"]:
             raise StorageError(f"revision {head['revision']} is missing or altered")
         return json.loads(stored.data)
-
-    def _details(self, head: dict) -> dict:
-        return self._revision(head).get("details", DETAILS)
 
     def _source(self, sha256: object) -> dict:
         try:

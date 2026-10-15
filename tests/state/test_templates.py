@@ -6,7 +6,7 @@ import pytest
 from studio.services.analysis import PageFlag
 from studio.state import sources
 from studio.state.errors import Conflict, Invalid, NotFound
-from studio.state.store import StorageError
+from studio.state.store import StorageError, canonical
 from studio.state.templates import INCOMPLETE
 from tests.state.helpers import POLICY, field, two_page_pdf
 
@@ -160,6 +160,44 @@ def test_review_and_approval_for_a_stale_revision_or_binding_are_refused(service
 def test_approval_needs_a_confirmed_review_of_the_same_revision(services, saved):
     with pytest.raises(Invalid, match="review of this revision is not confirmed"):
         services.templates.approve(saved["id"], 2, saved["binding"])
+
+
+def test_pages_drafting_left_unchecked_carry_forward_until_a_newer_draft(services, template):
+    drafted, _ = services.templates.save(template["id"], 1, POLICY, [field()], unchecked=[2])
+    assert drafted["unchecked"] == {"revision": 2, "pages": [2]}
+    edited, _ = services.templates.save(template["id"], 2, POLICY, [field(x=80.0)])
+    assert edited["revision"] == 3 and edited["unchecked"] == {"revision": 2, "pages": [2]}
+    redrafted, _ = services.templates.save(template["id"], 3, POLICY, [field()], unchecked=[])
+    assert redrafted["unchecked"] is None
+    assert services.templates.get(template["id"])["unchecked"] is None
+
+
+def test_a_template_never_drafted_has_no_unchecked_pages(services, saved):
+    assert saved["unchecked"] is None
+
+
+def test_review_must_confirm_each_unchecked_page_by_hand(services, template):
+    drafted, _ = services.templates.save(template["id"], 1, POLICY, [field()], unchecked=[2])
+    for given in ([], [1, 2]):
+        with pytest.raises(Invalid, match="page 2"):
+            services.templates.confirm_review(template["id"], 2, drafted["binding"], "a", given)
+    assert services.templates.get(template["id"])["review"] is None
+    reviewed = services.templates.confirm_review(template["id"], 2, drafted["binding"], "a", [2])
+    assert reviewed["review"]["checked_pages"] == [2]
+    approved = services.templates.approve(template["id"], 2, drafted["binding"], "b")
+    assert approved["approval"]["by"] == "b"
+
+
+def test_approval_is_refused_while_an_unchecked_page_is_unconfirmed(services, template):
+    drafted, _ = services.templates.save(template["id"], 1, POLICY, [field()], unchecked=[2])
+    head, etag = services.templates.head(template["id"])
+    review = {"revision": 2, "binding": drafted["binding"], "at": "t", "by": "a"}  # no pages
+    services.store.replace(
+        f"templates/{template['id']}/head.json", canonical({**head, "review": review}), etag
+    )
+    with pytest.raises(Invalid, match="page 2"):
+        services.templates.approve(template["id"], 2, drafted["binding"])
+    assert services.templates.get(template["id"])["approval"] is None
 
 
 def test_unmet_policy_requirements_block_review(services, template):

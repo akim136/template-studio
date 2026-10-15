@@ -54,6 +54,7 @@
   let conflict = null; // the server's current revision after a refused save
   let working = ""; // a review, approval, create or status check in flight
   let signOffError = "";
+  let checkedByHand = { revision: null, pages: new Set() }; // drafting's unchecked pages ticked in the drawer
   let completionError = ""; // a create or status check the server refused
 
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -228,7 +229,9 @@
     working = kind;
     signOffError = "";
     renderPreflight();
-    const answer = await api("POST", `/${kind}`, { revision: saved.revision, binding: saved.binding });
+    const body = { revision: saved.revision, binding: saved.binding };
+    if (kind === "review" && saved.unchecked) body.checked_pages = [...checked().pages].sort((a, b) => a - b);
+    const answer = await api("POST", `/${kind}`, body);
     working = "";
     if (answer.ok) {
       saved = answer.data;
@@ -394,6 +397,17 @@
     return null;
   }
 
+  // "page 2" or "pages 2, 3 and 5", for drafting's unchecked pages.
+  function pageList(numbers) {
+    return numbers.length === 1 ? `page ${numbers[0]}` : `pages ${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
+  }
+
+  // The drawer's ticks belong to one revision: a save makes a revision that needs them again.
+  function checked() {
+    if (checkedByHand.revision !== saved.revision) checkedByHand = { revision: saved.revision, pages: new Set() };
+    return checkedByHand;
+  }
+
   function renderBanners() {
     const box = $("[data-banners]");
     const shown = [];
@@ -414,6 +428,11 @@
     }
     const notice = drafted && saved.revision === drafted.revision && draftedNotice(drafted);
     if (notice) shown.push(banner("yellow", ...notice));
+    else if (saved.unchecked && !saved.review) { // a later revision keeps what drafting could not check
+      const left = saved.unchecked.pages;
+      shown.push(banner("yellow", `AI drafting was partial (revision ${saved.unchecked.revision}).`,
+        `${pageList(left).replace(/^p/, "P")} had no checked answer. Check ${left.length === 1 ? "it" : "each"} by hand; the review asks you to confirm ${left.length === 1 ? "it" : "each one"}.`));
+    }
     const bad = invalid().length;
     if (bad) {
       shown.push(banner("yellow", `${plural(bad, "field")} cannot be saved yet.`, "Fix the fields marked with ! (see Issues), then save."));
@@ -614,10 +633,35 @@
       : [el("li", { class: "help", text: "No blocking issues." })]));
     renderOperation();
 
+    const left = saved.unchecked ? saved.unchecked.pages : [];
+    const ticked = checked().pages;
+    const list = $("[data-pf-unchecked]");
+    list.hidden = !left.length;
+    const listed = `${saved.revision}:${left.join(",")}`;
+    if (list.dataset.listed !== listed) { // rebuilt only for another revision, so a tick keeps focus
+      list.dataset.listed = listed;
+      list.replaceChildren(...(left.length ? [
+        el("p", { class: "help", text: `AI drafting was partial (revision ${saved.unchecked.revision}): ${pageList(left)} had no checked answer.` }),
+        ...left.map((n) => el("label", { class: "check" },
+          el("input", { type: "checkbox", "data-pf-page": n, onchange: (event) => {
+            if (event.target.checked) ticked.add(n); else ticked.delete(n);
+            renderPreflight();
+          } }),
+          el("span", { text: `I checked page ${n} by hand` }))),
+      ] : []));
+    }
+    for (const tick of $$("[data-pf-page]")) {
+      tick.checked = Boolean(saved.review) || ticked.has(Number(tick.dataset.pfPage));
+      tick.disabled = Boolean(saved.review) || unsaved || Boolean(working);
+    }
+    const waiting = left.filter((n) => !ticked.has(n));
+
     const confirm = $("[data-pf-confirm]");
     confirm.checked = Boolean(saved.review) || working === "review";
-    confirm.disabled = Boolean(saved.review) || unsaved || saved.issues.length > 0 || Boolean(working);
-    $("[data-pf-confirm-label]").textContent = saved.review ? `Review confirmed for revision ${saved.revision}` : `I reviewed every field on revision ${saved.revision}`;
+    confirm.disabled = Boolean(saved.review) || unsaved || saved.issues.length > 0 || Boolean(working) || waiting.length > 0;
+    confirm.title = waiting.length && !saved.review ? `Check ${pageList(waiting)} by hand first` : "";
+    const scope = pages.length === 1 ? `the one page of revision ${saved.revision}` : `all ${pages.length} pages of revision ${saved.revision}, including pages without fields`;
+    $("[data-pf-confirm-label]").textContent = saved.review ? `Review confirmed for revision ${saved.revision}` : `I reviewed ${scope}`;
     $("[data-pf-confirm-help]").textContent = saved.review
       ? ` by ${saved.review.by}. A later save clears it.`
       : " Selecting, paging and zooming keep a confirmation; a saved change clears it.";
@@ -750,7 +794,7 @@
         el("span", {}, el("strong", { text: title }), el("span", { text: body })));
       verify.replaceChildren(
         check("Existence and counts verified", `${operation.external_id} holds ${plural(saved.fields.length, "field")}: ${parts.join(", ")}.`),
-        check(`Placement reviewed by ${reviewer}`, `${reviewer} confirmed reviewing every field of revision ${revision}${approver}.`));
+        check(`Placement reviewed by ${reviewer}`, `${reviewer} confirmed reviewing every page of revision ${revision}${approver}.`));
     }
 
     const busy = phase === "creating" || phase === "checking" || phase === "verifying";
