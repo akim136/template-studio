@@ -9,7 +9,8 @@ features: F-P4e-browser-tests, F-P4d-docs
 Until now no test ran the studio's JavaScript. `tests/e2e` drives a real Chromium (Playwright)
 against the studio served by uvicorn in local mode, on synthetic PDFs from
 `tests/analysis/pdf_factory.py`. Each test gets its own server on a loopback port and an empty state
-directory, and the server's environment holds no hosted setting.
+directory, and the server's environment holds no hosted setting. The guard tests' own studio
+processes get the same environment, so no test opens the developer's state.
 
 - A three-page PDF goes through setup (demo sponsor, upload until sealed, one-signer mode),
   the record, and the editor: the page image loads, a signature is placed and saved as revision 2,
